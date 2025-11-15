@@ -1,8 +1,9 @@
 # -------------------------------------------------------------
-# InsightHub – Landing Page + Premium Analytics UI (FINAL PATCHED VERSION)
+# InsightHub – GPT-Powered Auto-Clean + Auto-Visualize
 # -------------------------------------------------------------
 
 import os
+import json
 from datetime import datetime
 from io import BytesIO
 
@@ -12,103 +13,25 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
-from sklearn.linear_model import LinearRegression
+
+import openai  # uses the classic ChatCompletion API
 
 # -------------------------------------------------------------
-# PAGE CONFIG
+# CONFIG
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="InsightHub - AI Data Cleaning",
+    page_title="InsightHub - GPT Data Analyst",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
 )
 
-# -------------------------------------------------------------
-# CUSTOM CSS
-# -------------------------------------------------------------
-st.markdown("""
-<style>
+openai.api_key = os.getenv("OPENAI_API_KEY", None)
+if "OPENAI_API_KEY" in st.secrets:
+    openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-html, body, [class*="css"]  {
-    font-family: 'Inter', sans-serif;
-}
-
-.hero-container {
-    text-align: center;
-    padding-top: 60px;
-    padding-bottom: 20px;
-}
-
-.hero-title {
-    font-size: 46px;
-    font-weight: 700;
-    color: #ffffff;
-    padding-bottom: 10px;
-}
-
-.hero-subtitle {
-    font-size: 20px;
-    font-weight: 300;
-    color: #9CA3AF;
-    margin-bottom: 30px;
-}
-
-.cta-button {
-    background: linear-gradient(90deg, #06b6d4, #3b82f6);
-    padding: 14px 28px;
-    color: white;
-    font-size: 18px;
-    font-weight: 600;
-    border-radius: 10px;
-    border: none;
-    cursor: pointer;
-    margin-top: 18px;
-    box-shadow: 0px 0px 20px rgba(0,153,255,0.35);
-}
-.cta-button:hover {
-    transform: scale(1.04);
-}
-
-.card {
-    background: #111827;
-    padding: 20px;
-    border-radius: 14px;
-    box-shadow: 0px 0px 12px rgba(0,0,0,0.35);
-    margin-bottom: 24px;
-}
-
-.metric-card {
-    background: #1f2937;
-    padding: 18px;
-    border-radius: 12px;
-    text-align: center;
-    box-shadow: inset 0px 0px 10px rgba(255,255,255,0.05);
-}
-
-.metric-value {
-    font-size: 28px;
-    font-weight: 700;
-    color: #4ade80;
-}
-
-.metric-label {
-    font-size: 14px;
-    color: #d1d5db;
-}
-
-canvas {
-    border-radius: 16px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------------------------------------------
-# PLOTLY CLEAN THEME
-# -------------------------------------------------------------
+# Plotly dark theme
 pio.templates.default = "plotly_dark"
-
-CUSTOM_PLOTLY_THEME = dict(
+PLOTLY_THEME = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(color="#E1E1E1", size=14),
@@ -117,182 +40,347 @@ CUSTOM_PLOTLY_THEME = dict(
 )
 
 # -------------------------------------------------------------
-# LANDING PAGE STATE
+# MINIMAL CUSTOM CSS
 # -------------------------------------------------------------
-if "page" not in st.session_state:
-    st.session_state.page = "landing"
+st.markdown(
+    """
+<style>
+html, body, [class*="css"] {
+    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
 
-# -------------------------------------------------------------
-# LANDING PAGE (WebGL + CTA)
-# -------------------------------------------------------------
-if st.session_state.page == "landing":
+/* Cards */
+.card {
+    background: #111827;
+    padding: 20px 22px;
+    border-radius: 16px;
+    box-shadow: 0 18px 40px rgba(15,23,42,0.55);
+    border: 1px solid rgba(148,163,184,0.45);
+    margin-bottom: 24px;
+}
 
-    st.markdown("<div class='hero-container'>", unsafe_allow_html=True)
+/* Hero */
+.hero {
+    padding: 18px 22px 12px 22px;
+    border-radius: 18px;
+    background: radial-gradient(circle at top left, #4f46e5 0, #0ea5e9 45%, #020617 100%);
+    color: #f9fafb;
+    box-shadow: 0 24px 60px rgba(15,23,42,0.75);
+    margin-bottom: 18px;
+}
 
-    st.markdown("<div class='hero-title'>See Your Data Clean Itself.</div>", unsafe_allow_html=True)
-    st.markdown("<div class='hero-subtitle'>An interactive visualization showing how AI transforms chaos into clarity.</div>", unsafe_allow_html=True)
+/* Buttons */
+.stButton > button {
+    border-radius: 999px;
+    padding: 0.45rem 1.3rem;
+    border: none;
+    background: linear-gradient(135deg, #4f46e5, #0ea5e9);
+    color: white;
+    font-weight: 600;
+}
+.stButton > button:hover {
+    filter: brightness(1.05);
+}
 
-    # --- WEBGL ANIMATION ---
-    st.components.v1.html("""
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-        <div id="container"></div>
-        <script>
-            const container = document.getElementById('container');
-            const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(70, window.innerWidth / 350, 0.1, 1000);
-            camera.position.z = 3;
-
-            const renderer = new THREE.WebGLRenderer({ alpha: true });
-            renderer.setSize(window.innerWidth * 0.9, 350);
-            container.appendChild(renderer.domElement);
-
-            const geometry = new THREE.BufferGeometry();
-            const count = 1500;
-            const positions = new Float32Array(count * 3);
-
-            for (let i = 0; i < count; i++) {
-                positions[i * 3] = (Math.random() - 0.5) * 4;
-                positions[i * 3 + 1] = (Math.random() - 0.5) * 4;
-                positions[i * 3 + 2] = (Math.random() - 0.5) * 4;
-            }
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-            const material = new THREE.PointsMaterial({
-                size: 0.035,
-                color: 0x66ccff,
-                transparent: true
-            });
-
-            const points = new THREE.Points(geometry, material);
-            scene.add(points);
-
-            let clean = false;
-
-            function animate() {
-                requestAnimationFrame(animate);
-
-                if (clean) {
-                    geometry.attributes.position.array.forEach((val, idx) => {
-                        geometry.attributes.position.array[idx] *= 0.97;
-                    });
-                    geometry.attributes.position.needsUpdate = true;
-                } else {
-                    points.rotation.x += 0.002;
-                    points.rotation.y += 0.002;
-                }
-
-                renderer.render(scene, camera);
-            }
-            animate();
-
-            container.addEventListener('click', () => { clean = !clean; });
-        </script>
-    """, height=380)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if st.button("Enter InsightHub", key="enter"):
-        st.session_state.page = "app"
-        st.rerun()
-
-    st.stop()
+/* DataFrame wrapper */
+[data-testid="stDataFrame"] {
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid rgba(148,163,184,0.35);
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 # -------------------------------------------------------------
-# ANALYTICS APP CODE
+# GPT HELPERS
 # -------------------------------------------------------------
+def build_dataframe_spec(df: pd.DataFrame, max_rows: int = 20) -> str:
+    """
+    Build a JSON summary of the DataFrame for GPT:
+    - schema (column + dtype)
+    - missing counts
+    - basic statistics
+    - sample rows
+    """
+    spec = {}
+    spec["n_rows"], spec["n_cols"] = df.shape
+    spec["dtypes"] = {c: str(t) for c, t in df.dtypes.items()}
+    spec["missing_counts"] = df.isna().sum().to_dict()
 
-# ---------- Utility functions ----------
-def load_data(uploaded_file: BytesIO):
-    if uploaded_file.name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    return pd.read_excel(uploaded_file)
-
-def clean_dataframe(df):
-    df = df.copy()
-    df.columns = [c.strip() for c in df.columns]
-
-    for col in df.columns:
-        if "date" in col.lower():
-            try:
-                df[col] = pd.to_datetime(df[col], errors="coerce")
-            except:
-                pass
-
-    for col in df.select_dtypes("object"):
-        cleaned = (
-            df[col].astype(str)
-            .str.replace(",", "")
-            .str.replace("$", "")
-            .str.strip()
+    # Describe numeric & categorical separately to keep it compact
+    try:
+        desc_num = df.select_dtypes(include=[np.number]).describe().to_dict()
+    except Exception:
+        desc_num = {}
+    try:
+        desc_cat = (
+            df.select_dtypes(exclude=[np.number])
+            .describe(include="all", datetime_is_numeric=True)
+            .to_dict()
         )
-        numeric = pd.to_numeric(cleaned, errors="coerce")
-        if numeric.notna().mean() > 0.4:
-            df[col] = numeric
+    except Exception:
+        desc_cat = {}
 
-    df = df.loc[:, ~df.columns.duplicated()]  # <--- FIX FOR NARWHALS
-    return df
+    spec["describe_numeric"] = desc_num
+    spec["describe_other"] = desc_cat
 
-def detect_date_column(df):
-    for c in df.columns:
-        if "date" in c.lower():
-            return c
-    return None
+    sample = df.head(max_rows).copy()
+    # Convert datetimes to string for JSON
+    for col in sample.columns:
+        if np.issubdtype(sample[col].dtype, np.datetime64):
+            sample[col] = sample[col].astype(str)
+    spec["sample_rows"] = sample.to_dict(orient="records")
 
-def detect_target_column(df):
-    numeric = df.select_dtypes([np.number]).columns
-    for c in numeric:
-        if any(k in c.lower() for k in ["revenue", "sales", "amount"]):
-            return c
-    return numeric[-1]
+    return json.dumps(spec, default=str)
 
-def compute_kpis(df, target, date_col):
-    s = df[target]
-    return {
-        "Total": float(s.sum()),
-        "Average": float(s.mean()),
-        "Max": float(s.max()),
-        "Min": float(s.min())
+
+SYSTEM_PROMPT = """
+You are an expert data analyst and Python developer.
+You are helping a non-technical business user explore a pandas DataFrame called `df`.
+
+You will receive a JSON description of the DataFrame: schema, statistics and a few sample rows.
+Your job is to:
+1. Decide how to CLEAN the data (types, missing values, duplicates, obvious outliers).
+2. Generate Python CODE that does this cleaning in a function `def clean_df(df):`.
+3. Design 2–5 meaningful Plotly visualizations and generate Python CODE in a function
+   `def create_charts(df):` that:
+      - takes the CLEANED DataFrame as input
+      - returns a list named `figures` containing Plotly Figure objects
+      - each figure should already have a title, axis labels, etc.
+4. Write a concise, business-friendly INSIGHT SUMMARY in Markdown.
+
+Constraints:
+- Libraries you may use in code: pandas as pd, numpy as np, plotly.express as px, plotly.graph_objects as go.
+- DO NOT use seaborn, statsmodels, matplotlib, or any other library.
+- Do not read or write any files.
+- Do not create or expect any global variables other than `df`.
+- Cleaning code should be robust and not crash when some columns are missing or non-numeric.
+- Prefer simple models (no ML libraries).
+
+Return your answer as STRICT JSON with this structure:
+
+{
+  "cleaning_code": "python code that defines clean_df(df)",
+  "chart_code": "python code that defines create_charts(df)",
+  "insights": "markdown string with 5-10 bullet points of insights"
+}
+
+Important:
+- The value of `cleaning_code` MUST define a function `clean_df(df)` and end by returning the cleaned df.
+- The value of `chart_code` MUST define a function `create_charts(df)` and finish by returning a list called `figures`.
+- Do NOT wrap any code in backticks.
+- Do NOT include explanations outside the JSON.
+"""
+
+def call_gpt_for_analysis(df: pd.DataFrame) -> dict:
+    if not openai.api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set in environment or Streamlit secrets.")
+
+    spec_json = build_dataframe_spec(df)
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": spec_json},
+    ]
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=0.2,
+    )
+    raw_text = completion["choices"][0]["message"]["content"]
+
+    # Clean possible ```json code fences
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        # strip first and last triple backticks
+        parts = cleaned.split("```")
+        if len(parts) >= 3:
+            cleaned = parts[1]
+            # remove optional 'json' prefix
+            if cleaned.strip().startswith("json"):
+                cleaned = cleaned.strip()[4:]
+    cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse GPT JSON: {e}\nRaw text:\n{raw_text[:1500]}")
+
+    # Basic validation
+    for key in ["cleaning_code", "chart_code", "insights"]:
+        if key not in parsed:
+            raise ValueError(f"GPT response missing key: {key}")
+
+    return parsed
+
+
+def execute_cleaning_code(df: pd.DataFrame, cleaning_code: str) -> pd.DataFrame:
+    """
+    Execute the GPT-generated cleaning code in a restricted namespace.
+    Expect it to define clean_df(df).
+    """
+    local_env = {}
+    global_env = {
+        "pd": pd,
+        "np": np,
     }
+    exec(cleaning_code, global_env, local_env)
+
+    if "clean_df" not in local_env:
+        raise ValueError("cleaning_code did not define a function clean_df(df).")
+
+    cleaned_df = local_env["clean_df"](df.copy())
+    if not isinstance(cleaned_df, pd.DataFrame):
+        raise ValueError("clean_df(df) did not return a pandas DataFrame.")
+    return cleaned_df
+
+
+def execute_chart_code(df: pd.DataFrame, chart_code: str):
+    """
+    Execute the GPT-generated chart code.
+    Expect it to define create_charts(df) that returns list of figures.
+    """
+    local_env = {}
+    global_env = {
+        "pd": pd,
+        "np": np,
+        "px": px,
+        "go": go,
+    }
+    exec(chart_code, global_env, local_env)
+
+    if "create_charts" not in local_env:
+        raise ValueError("chart_code did not define a function create_charts(df).")
+
+    figures = local_env["create_charts"](df.copy())
+    if not isinstance(figures, (list, tuple)):
+        raise ValueError("create_charts(df) did not return a list of figures.")
+    return figures
+
 
 # -------------------------------------------------------------
-# MAIN DASHBOARD
+# APP UI
 # -------------------------------------------------------------
+st.markdown(
+    """
+<div class="hero">
+  <h1 style="margin-bottom:4px;">📊 InsightHub – GPT Data Analyst</h1>
+  <p style="margin:0;font-size:0.95rem;color:#e5e7eb;">
+    Upload a CSV/Excel file. GPT will automatically clean the data, choose the best charts,
+    and explain what matters in plain language.
+  </p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-st.title("📊 InsightHub – Data Analytics Dashboard")
+st.sidebar.header("1️⃣ Upload your data")
+uploaded_file = st.sidebar.file_uploader(
+    "CSV or Excel", type=["csv", "xls", "xlsx"], help="Files stay in your session only."
+)
 
-uploaded = st.sidebar.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"])
+max_rows_for_spec = st.sidebar.slider(
+    "Rows to send to GPT (sample size)", min_value=10, max_value=100, value=25, step=5
+)
 
-if not uploaded:
-    st.info("Upload a file to begin.")
+run_button = st.sidebar.button("2️⃣ Run GPT Analysis")
+
+# Space to store results in session to avoid recalling API on every rerun
+if "ai_result" not in st.session_state:
+    st.session_state.ai_result = None
+if "cleaned_df" not in st.session_state:
+    st.session_state.cleaned_df = None
+
+# ---------------- MAIN LOGIC ----------------
+if uploaded_file is None:
+    st.info("👆 Upload a CSV or Excel file from the sidebar to get started.")
     st.stop()
 
-df_raw = load_data(uploaded)
-df = clean_dataframe(df_raw)
+# Load data
+try:
+    if uploaded_file.name.lower().endswith(".csv"):
+        df_raw = pd.read_csv(uploaded_file)
+    else:
+        df_raw = pd.read_excel(uploaded_file)
+except Exception as e:
+    st.error(f"Failed to read file: {e}")
+    st.stop()
 
-st.success("File uploaded and cleaned.")
-st.dataframe(df.head(50), use_container_width=True)
+# Show preview
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("📄 Data Preview")
+st.caption("First 100 rows of your uploaded data (raw, before cleaning).")
+st.dataframe(df_raw.head(100), use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
+# Optionally run GPT
+if run_button:
+    # Reset previous state
+    st.session_state.ai_result = None
+    st.session_state.cleaned_df = None
 
-# Detect columns
-date_col = detect_date_column(df)
-target_col = detect_target_column(df)
+    with st.spinner("🤖 Calling GPT to analyze your data..."):
+        try:
+            # Limit rows for summary
+            df_for_spec = df_raw.head(max_rows_for_spec).copy()
+            ai_result = call_gpt_for_analysis(df_for_spec)
+            # Run cleaning code
+            cleaned_df = execute_cleaning_code(df_raw, ai_result["cleaning_code"])
+            st.session_state.ai_result = ai_result
+            st.session_state.cleaned_df = cleaned_df
+        except Exception as e:
+            st.error(f"AI analysis failed: {e}")
+            st.stop()
 
-# KPIs
-kpis = compute_kpis(df, target_col, date_col)
+# If we already have results, display them
+if st.session_state.ai_result is None or st.session_state.cleaned_df is None:
+    st.info("Click **'Run GPT Analysis'** in the sidebar to let GPT clean and analyze your data.")
+    st.stop()
 
-st.subheader("📌 KPIs")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total", f"{kpis['Total']:,.2f}")
-c2.metric("Average", f"{kpis['Average']:,.2f}")
-c3.metric("Max", f"{kpis['Max']:,.2f}")
-c4.metric("Min", f"{kpis['Min']:,.2f}")
+ai_result = st.session_state.ai_result
+cleaned_df = st.session_state.cleaned_df
 
-# Visuals
-st.subheader("📈 Histogram")
-num_cols = df.select_dtypes([np.number]).columns.tolist()
-col = st.selectbox("Select column", num_cols)
+# ---------------- CLEANED DATA CARD ----------------
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("🧹 Cleaned Data (GPT Output)")
+st.caption("This is the DataFrame after GPT's cleaning logic (types, missing values, etc.).")
+st.dataframe(cleaned_df.head(100), use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
-fig = px.histogram(df, x=col, nbins=30, opacity=0.85)
-fig.update_layout(**CUSTOM_PLOTLY_THEME)
-st.plotly_chart(fig, use_container_width=True)
+# ---------------- INSIGHTS CARD ----------------
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("🧠 AI Insights")
+st.caption("GPT's narrative summary of key patterns and findings in your data.")
+st.markdown(ai_result.get("insights", "_No insights returned._"))
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------- CHARTS CARD ----------------
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("📈 GPT-Recommended Visualizations")
+
+try:
+    figures = execute_chart_code(cleaned_df, ai_result["chart_code"])
+    if not figures:
+        st.write("GPT did not return any figures.")
+    else:
+        for i, fig in enumerate(figures):
+            # Ensure it's a Plotly Figure
+            if isinstance(fig, (go.Figure, px.Figure)):
+                fig.update_layout(**PLOTLY_THEME)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"Item {i} from create_charts is not a Plotly Figure object.")
+except Exception as e:
+    st.error(f"Error while generating charts from GPT code: {e}")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------- ADVANCED: SHOW GENERATED CODE ----------------
+with st.expander("🔍 Advanced: View GPT-Generated Cleaning & Chart Code"):
+    st.markdown("#### Cleaning Code (`clean_df(df)`)")
+    st.code(ai_result["cleaning_code"], language="python")
+    st.markdown("#### Chart Code (`create_charts(df)`)")
+    st.code(ai_result["chart_code"], language="python")
