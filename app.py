@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# InsightHub – Landing Page + Premium Analytics UI
+# InsightHub – Landing Page + Premium Analytics UI (FINAL PATCHED VERSION)
 # -------------------------------------------------------------
 
 import os
@@ -43,7 +43,7 @@ html, body, [class*="css"]  {
     font-size: 46px;
     font-weight: 700;
     color: #ffffff;
-    padding-bottom: 14px;
+    padding-bottom: 10px;
 }
 
 .hero-subtitle {
@@ -103,11 +103,11 @@ canvas {
 </style>
 """, unsafe_allow_html=True)
 
-
 # -------------------------------------------------------------
 # PLOTLY CLEAN THEME
 # -------------------------------------------------------------
 pio.templates.default = "plotly_dark"
+
 CUSTOM_PLOTLY_THEME = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
@@ -116,13 +116,15 @@ CUSTOM_PLOTLY_THEME = dict(
     yaxis=dict(showgrid=False, zeroline=False),
 )
 
-
 # -------------------------------------------------------------
-# LANDING PAGE (Hero + WebGL Animation)
+# LANDING PAGE STATE
 # -------------------------------------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "landing"
 
+# -------------------------------------------------------------
+# LANDING PAGE (WebGL + CTA)
+# -------------------------------------------------------------
 if st.session_state.page == "landing":
 
     st.markdown("<div class='hero-container'>", unsafe_allow_html=True)
@@ -130,18 +132,18 @@ if st.session_state.page == "landing":
     st.markdown("<div class='hero-title'>See Your Data Clean Itself.</div>", unsafe_allow_html=True)
     st.markdown("<div class='hero-subtitle'>An interactive visualization showing how AI transforms chaos into clarity.</div>", unsafe_allow_html=True)
 
-    # WebGL – Three.js shader animation visualizing "messy → clean" data
+    # --- WEBGL ANIMATION ---
     st.components.v1.html("""
         <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
         <div id="container"></div>
         <script>
             const container = document.getElementById('container');
             const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(70, window.innerWidth / 400, 0.1, 1000);
+            const camera = new THREE.PerspectiveCamera(70, window.innerWidth / 350, 0.1, 1000);
             camera.position.z = 3;
 
             const renderer = new THREE.WebGLRenderer({ alpha: true });
-            renderer.setSize(window.innerWidth * 0.9, 400);
+            renderer.setSize(window.innerWidth * 0.9, 350);
             container.appendChild(renderer.domElement);
 
             const geometry = new THREE.BufferGeometry();
@@ -186,22 +188,21 @@ if st.session_state.page == "landing":
 
             container.addEventListener('click', () => { clean = !clean; });
         </script>
-    """, height=420)
+    """, height=380)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if st.button("Enter InsightHub", key="enter", help="Start analyzing your data"):
-    st.session_state.page = "app"
-    st.rerun()
+    if st.button("Enter InsightHub", key="enter"):
+        st.session_state.page = "app"
+        st.rerun()
 
     st.stop()
 
-
 # -------------------------------------------------------------
-# ANALYTICS APP (Your premium UI)
+# ANALYTICS APP CODE
 # -------------------------------------------------------------
-# --------- Utility functions -----------
 
+# ---------- Utility functions ----------
 def load_data(uploaded_file: BytesIO):
     if uploaded_file.name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
@@ -212,9 +213,11 @@ def clean_dataframe(df):
     df.columns = [c.strip() for c in df.columns]
 
     for col in df.columns:
-        if any(x in col.lower() for x in ["date", "time", "day"]):
-            try: df[col] = pd.to_datetime(df[col])
-            except: pass
+        if "date" in col.lower():
+            try:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+            except:
+                pass
 
     for col in df.select_dtypes("object"):
         cleaned = (
@@ -237,57 +240,59 @@ def detect_date_column(df):
     return None
 
 def detect_target_column(df):
-    for c in df.select_dtypes([np.number]).columns:
+    numeric = df.select_dtypes([np.number]).columns
+    for c in numeric:
         if any(k in c.lower() for k in ["revenue", "sales", "amount"]):
             return c
-    return df.select_dtypes([np.number]).columns[-1]
+    return numeric[-1]
 
 def compute_kpis(df, target, date_col):
-    series = df[target]
+    s = df[target]
     return {
-        "Total": float(series.sum()),
-        "Average": float(series.mean()),
-        "Max": float(series.max()),
-        "Min": float(series.min())
+        "Total": float(s.sum()),
+        "Average": float(s.mean()),
+        "Max": float(s.max()),
+        "Min": float(s.min())
     }
 
-
 # -------------------------------------------------------------
-# APP UI
+# MAIN DASHBOARD
 # -------------------------------------------------------------
 
 st.title("📊 InsightHub – Data Analytics Dashboard")
 
 uploaded = st.sidebar.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"])
 
-if uploaded:
-    df_raw = load_data(uploaded)
-    df = clean_dataframe(df_raw)
-
-    st.success("File uploaded and cleaned.")
-
-    st.dataframe(df.head(50), use_container_width=True)
-
-    date_col = detect_date_column(df)
-    target_col = detect_target_column(df)
-
-    kpis = compute_kpis(df, target_col, date_col)
-
-    st.subheader("📌 KPIs")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total", f"{kpis['Total']:,.2f}")
-    c2.metric("Average", f"{kpis['Average']:,.2f}")
-    c3.metric("Max", f"{kpis['Max']:,.2f}")
-    c4.metric("Min", f"{kpis['Min']:,.2f}")
-
-    st.subheader("📈 Histogram")
-    num_cols = df.select_dtypes([np.number]).columns.tolist()
-    col = st.selectbox("Select column", num_cols)
-
-    fig = px.histogram(df, x=col, nbins=30, opacity=0.85)
-    fig.update_layout(**CUSTOM_PLOTLY_THEME)
-    st.plotly_chart(fig, use_container_width=True)
-
-else:
+if not uploaded:
     st.info("Upload a file to begin.")
+    st.stop()
 
+df_raw = load_data(uploaded)
+df = clean_dataframe(df_raw)
+
+st.success("File uploaded and cleaned.")
+st.dataframe(df.head(50), use_container_width=True)
+
+
+# Detect columns
+date_col = detect_date_column(df)
+target_col = detect_target_column(df)
+
+# KPIs
+kpis = compute_kpis(df, target_col, date_col)
+
+st.subheader("📌 KPIs")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total", f"{kpis['Total']:,.2f}")
+c2.metric("Average", f"{kpis['Average']:,.2f}")
+c3.metric("Max", f"{kpis['Max']:,.2f}")
+c4.metric("Min", f"{kpis['Min']:,.2f}")
+
+# Visuals
+st.subheader("📈 Histogram")
+num_cols = df.select_dtypes([np.number]).columns.tolist()
+col = st.selectbox("Select column", num_cols)
+
+fig = px.histogram(df, x=col, nbins=30, opacity=0.85)
+fig.update_layout(**CUSTOM_PLOTLY_THEME)
+st.plotly_chart(fig, use_container_width=True)
