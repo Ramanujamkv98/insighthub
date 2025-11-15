@@ -1,5 +1,5 @@
 # ======================================================================
-# InsightHub 6.1.3 – Semantic KPI Edition
+# DataPilot 6.1.3 – Semantic KPI Edition
 # Fully fixed version – No emojis – Streamlit Cloud Compatible
 # ======================================================================
 
@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("D")
+st.title("DataPilot")
 
 
 
