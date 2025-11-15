@@ -1,9 +1,7 @@
 # -------------------------------------------------------------
-# InsightHub – GPT AutoClean + AutoVisualize (OpenAI v1.0+)
-# JSON VALIDATION + SAFE FALLBACKS
+# InsightHub – GPT AutoClean + AutoVisualize (Robust JSON + OpenAI v1+)
 # -------------------------------------------------------------
 
-import os
 import json
 import numpy as np
 import pandas as pd
@@ -13,7 +11,6 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from openai import OpenAI
-
 
 # -------------------------------------------------------------
 # PAGE CONFIG
@@ -25,10 +22,10 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# LOAD API KEY
+# API KEY
 # -------------------------------------------------------------
 if "OPENAI_API_KEY" not in st.secrets:
-    st.error("Add OPENAI_API_KEY to your Streamlit secrets.")
+    st.error("Please set OPENAI_API_KEY in Streamlit secrets.")
     st.stop()
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -37,8 +34,16 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # THEME + CSS
 # -------------------------------------------------------------
 pio.templates.default = "plotly_dark"
+PLOTLY_THEME = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="#E1E1E1", size=14),
+    xaxis=dict(showgrid=False),
+    yaxis=dict(showgrid=False),
+)
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 .card {
     background: #0f172a;
@@ -47,12 +52,21 @@ st.markdown("""
     border: 1px solid #1e293b;
     margin-top: 1rem;
 }
+.stButton > button {
+    border-radius: 8px;
+    background: linear-gradient(90deg, #4f46e5, #0ea5e9);
+    color: white;
+    padding: 0.6rem 1.2rem;
+    border: none;
+    font-weight: 600;
+}
 </style>
-""", unsafe_allow_html=True)
-
+""",
+    unsafe_allow_html=True,
+)
 
 # -------------------------------------------------------------
-# GPT HELPER FUNCTIONS
+# GPT HELPERS
 # -------------------------------------------------------------
 SYSTEM_PROMPT = """
 You are an expert Python data analyst.
@@ -69,21 +83,33 @@ Rules:
 - cleaning_code must define:  def clean_df(df): ... return df
 - chart_code must define:    def create_charts(df): ... return figures
 - Use ONLY pandas, numpy, plotly.
-- DO NOT include markdown, DO NOT include text before or after JSON.
+- Do NOT include markdown, code fences, or explanations outside JSON.
 """
 
-def build_df_payload(df, n=25):
-    return json.dumps({
-        "n_rows": df.shape[0],
-        "n_cols": df.shape[1],
-        "dtypes": {c: str(df[c].dtype) for c in df.columns},
-        "missing": df.isna().sum().to_dict(),
-        "sample": df.head(n).to_dict(orient="records")
-    })
+def build_df_payload(df: pd.DataFrame, n: int = 25) -> str:
+    """Create a compact JSON summary of the DataFrame for GPT."""
+    return json.dumps(
+        {
+            "n_rows": df.shape[0],
+            "n_cols": df.shape[1],
+            "dtypes": {c: str(df[c].dtype) for c in df.columns},
+            "missing": df.isna().sum().to_dict(),
+            "sample": df.head(n).to_dict(orient="records"),
+        }
+    )
 
+def sanitize_json_text(text: str) -> str:
+    """
+    Fix common invalid escape sequences from GPT like '\$',
+    which are illegal in JSON but valid in Python.
+    """
+    # Fix the exact issue you hit: "\$" inside strings
+    text = text.replace("\\$", "$")
+    # You can add more targeted replacements here if needed
+    return text
 
-def call_gpt(df):
-    """Call GPT and ensure JSON parsing."""
+def call_gpt(df: pd.DataFrame) -> dict:
+    """Call GPT and return parsed JSON with cleaning_code, chart_code, insights."""
     payload = build_df_payload(df)
 
     completion = client.chat.completions.create(
@@ -92,43 +118,66 @@ def call_gpt(df):
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": payload},
-        ]
+        ],
     )
 
     raw = completion.choices[0].message.content.strip()
+    st.session_state["raw_gpt"] = raw  # store for debugging
 
-    # ---------- DEBUG PANEL ----------
-    st.session_state["raw_gpt"] = raw
-
-    # Remove code fences if present
+    # Strip markdown fences if present
     if raw.startswith("```"):
-        raw = raw.split("```")[1].strip()
+        parts = raw.split("```")
+        if len(parts) >= 2:
+            raw = parts[1].strip()
     if raw.endswith("```"):
         raw = raw[:-3].strip()
 
-    # Try JSON parse
+    # Sanitize invalid JSON escapes
+    raw = sanitize_json_text(raw)
+
     try:
-        return json.loads(raw)
-    except Exception:
-        # Show raw output, don't crash
+        data = json.loads(raw)
+    except Exception as e:
         st.error("GPT returned invalid JSON. See raw output below.")
         st.code(st.session_state["raw_gpt"])
-        raise ValueError("GPT returned non-JSON output.")
+        raise ValueError(f"JSON parse error: {e}")
 
+    # Basic validation
+    for key in ("cleaning_code", "chart_code", "insights"):
+        if key not in data:
+            raise ValueError(f"GPT JSON missing key: {key}")
 
-def exec_cleaning(df, code):
+    return data
+
+def exec_cleaning(df: pd.DataFrame, code: str) -> pd.DataFrame:
+    """Execute cleaning_code to get clean_df(df)."""
     env = {"pd": pd, "np": np}
     loc = {}
     exec(code, env, loc)
-    return loc["clean_df"](df.copy())
 
+    if "clean_df" not in loc:
+        raise ValueError("cleaning_code did not define clean_df(df).")
 
-def exec_charts(df, code):
+    out = loc["clean_df"](df.copy())
+    if not isinstance(out, pd.DataFrame):
+        raise ValueError("clean_df(df) did not return a DataFrame.")
+    return out
+
+def exec_charts(df: pd.DataFrame, code: str):
+    """Execute chart_code to get figures from create_charts(df)."""
     env = {"pd": pd, "np": np, "px": px, "go": go}
     loc = {}
     exec(code, env, loc)
-    return loc["create_charts"](df.copy())
 
+    if "create_charts" not in loc:
+        raise ValueError("chart_code did not define create_charts(df).")
+
+    figs = loc["create_charts"](df.copy())
+
+    # Your model returned dict earlier; support both dict and list
+    if isinstance(figs, dict):
+        figs = list(figs.values())
+    return figs
 
 # -------------------------------------------------------------
 # UI
@@ -142,7 +191,7 @@ run_btn = st.sidebar.button("Run GPT Analysis")
 if "result" not in st.session_state:
     st.session_state.result = None
     st.session_state.cleaned = None
-
+    st.session_state.raw_gpt = ""
 
 # -------------------------------------------------------------
 # LOAD FILE
@@ -152,11 +201,10 @@ if not uploaded:
     st.stop()
 
 try:
-    df_raw = (
-        pd.read_csv(uploaded)
-        if uploaded.name.endswith(".csv")
-        else pd.read_excel(uploaded)
-    )
+    if uploaded.name.lower().endswith(".csv"):
+        df_raw = pd.read_csv(uploaded)
+    else:
+        df_raw = pd.read_excel(uploaded)
 except Exception as e:
     st.error(f"Failed to load file: {e}")
     st.stop()
@@ -176,7 +224,6 @@ if run_btn:
 
         st.session_state.result = gpt_json
         st.session_state.cleaned = cleaned
-
     except Exception as e:
         st.error(f"GPT Analysis Failed: {e}")
         st.stop()
@@ -188,12 +235,12 @@ if st.session_state.result is None:
 result = st.session_state.result
 cleaned = st.session_state.cleaned
 
-
 # -------------------------------------------------------------
 # CLEANED DATA
 # -------------------------------------------------------------
 st.markdown("<div class='card'>", unsafe_allow_html=True)
 st.subheader("🧹 Cleaned Data")
+st.caption("Output of GPT's clean_df(df).")
 st.dataframe(cleaned.head(50), use_container_width=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -212,11 +259,15 @@ st.subheader("📈 GPT-Generated Charts")
 
 try:
     figs = exec_charts(cleaned, result["chart_code"])
-    for fig in figs:
-        if isinstance(fig, go.Figure):
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("GPT returned non-figure.")
+    if not figs:
+        st.info("GPT did not return any figures.")
+    else:
+        for fig in figs:
+            if isinstance(fig, go.Figure):
+                fig.update_layout(**PLOTLY_THEME)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("GPT returned a non-Plotly object.")
 except Exception as e:
     st.error(f"Chart Error: {e}")
 
@@ -224,4 +275,4 @@ except Exception as e:
 # RAW GPT OUTPUT (DEBUG)
 # -------------------------------------------------------------
 with st.expander("🔧 Raw GPT Output (for debugging)"):
-    st.code(st.session_state.get("raw_gpt", "No response recorded"))
+    st.code(st.session_state.get("raw_gpt", "No response yet"))
