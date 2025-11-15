@@ -4,5 +4,4 @@ numpy
 plotly
 scikit-learn
 openpyxl
-# Optional – only if you plan to use OpenAI summaries
-openai
+statsmodels
