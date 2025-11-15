@@ -117,7 +117,8 @@ def call_gpt(df):
             {"role": "user", "content": spec},
         ]
     )
-    content = response.choices[0].message["content"]
+    content = response.choices[0].message.content
+
 
     # Remove accidental code fences
     cleaned = content.strip()
