@@ -1,7 +1,8 @@
-# ============================================================
-#  DataPilot 7.0 — Premium Analytics Workspace UI
-#  NON-ChatGPT, SaaS-like Design
-# ============================================================
+# ======================================================================
+# DataPilot 6.1.5 – Stable Semantic KPI Edition
+# Safe GPT Execution + Figure Validation + No Emojis
+# Streamlit Cloud Compatible
+# ======================================================================
 
 import streamlit as st
 import pandas as pd
@@ -10,165 +11,202 @@ import plotly.express as px
 from openai import OpenAI
 import json
 
-# ------------------------------------------------------------
-# CONFIG
-# ------------------------------------------------------------
+# ======================================================================
+# STREAMLIT CONFIG
+# ======================================================================
 st.set_page_config(
     page_title="DataPilot",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for premium look
-st.markdown("""
-<style>
-    body { background-color: #0d1117; color: white; }
-    .section-title {
-        font-size: 22px; 
-        font-weight: 600; 
-        margin-top: 25px;
-        margin-bottom: 10px;
-        color: #e5e7eb;
-    }
-    .kpi-card {
-        padding:18px; 
-        border-radius:12px; 
-        background:#111827; 
-        border:1px solid #1f2937;
-        height:100px;
-    }
-    .kpi-label {
-        font-size:14px; 
-        color:#9ca3af;
-    }
-    .kpi-value {
-        font-size:28px; 
-        font-weight:650;
-        margin-top:6px; 
-        color:white;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# HEADER
-# ------------------------------------------------------------
-st.markdown("<h1 style='color:white;'>DataPilot — Business Insights Workspace</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color:#9ca3af;'>Upload your data → Clean → Analyze → Get plain-English insights.</p>", unsafe_allow_html=True)
+st.title("DataPilot")
 
 
-# ------------------------------------------------------------
-# SIDEBAR NAVIGATION
-# ------------------------------------------------------------
-page = st.sidebar.radio(
-    "Navigation",
-    ["Upload Data", "Overview", "Data Explorer", "AI Visualizations", "Insights", "Ask Your Data"],
-    index=0
-)
-
+# ======================================================================
+# OPENAI CLIENT
+# ======================================================================
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
-# ------------------------------------------------------------
-# FILE UPLOAD
-# ------------------------------------------------------------
-if page == "Upload Data":
-    st.markdown("<div class='section-title'>Upload Your Dataset</div>", unsafe_allow_html=True)
-    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+# ======================================================================
+# 1. SEMANTIC MAP
+# ======================================================================
+SEMANTIC_MAP = {
+    "revenue": ["revenue", "sales", "gmv", "amount", "amt", "rev", "turnover", "income"],
+    "units_sold": ["units", "units_sold", "qty", "quantity", "sold"],
+    "daily_demand": ["demand", "daily_demand", "orders", "order_qty"],
+    "inventory_on_hand": ["inventory", "inv_onhand", "stock", "onhand", "available_qty"],
+    "stockout_flag": ["stockout", "out_of_stock", "oos"],
+    "lead_time_days": ["leadtime", "lead_time"],
+    "patients_in": ["admissions", "patients_in", "inflow"],
+    "patients_out": ["patients_out", "discharges", "outflow"],
+    "surgery_count": ["surgeries", "surgery"],
+    "spend": ["spend", "cost", "budget", "ad_spend", "marketing_spend"],
+    "profit": ["profit", "net_profit"],
+    "expenses": ["expense", "expenses", "costs"]
+}
 
-    if uploaded:
-        st.session_state["raw"] = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-        st.success("File uploaded successfully! Now go to 'Overview'.")
+
+# ======================================================================
+# 2. SEMANTIC COLUMN RENAMING
+# ======================================================================
+def semantic_match(col):
+    col_l = col.lower()
+    for key, synonyms in SEMANTIC_MAP.items():
+        if any(s in col_l for s in synonyms):
+            return key
+    return None
 
 
-if "raw" not in st.session_state:
-    st.stop()
-
-df_raw = st.session_state["raw"]
-
-
-# ------------------------------------------------------------
-# CLEANING + SEMANTICS
-# ------------------------------------------------------------
-def clean(df):
+def harmonize_columns(df):
     df = df.copy()
-    df = df.loc[:, ~df.columns.str.contains("Unnamed")]
+    rename_map = {}
     for col in df.columns:
-        if df[col].dtype == "object":
-            cleaned = (df[col]
-                       .astype(str)
-                       .str.replace(",", "")
-                       .str.replace("$", "")
-                       .str.replace("₹", "")
-                       .str.strip())
-            df[col] = pd.to_numeric(cleaned, errors="ignore")
-        if any(x in col.lower() for x in ["date", "week", "day"]):
-            df[col] = pd.to_datetime(df[col], errors="ignore")
-    return df
-
-df_clean = clean(df_raw)
+        meaning = semantic_match(col)
+        rename_map[col] = meaning if meaning else col
+    return df.rename(columns=rename_map)
 
 
-# ------------------------------------------------------------
-# PAGE: OVERVIEW (KPI CARDS)
-# ------------------------------------------------------------
-if page == "Overview":
-    st.markdown("<div class='section-title'>Overview</div>", unsafe_allow_html=True)
+# ======================================================================
+# 3. KPI RULE ENGINE
+# ======================================================================
+KPI_RULES = {
+    "retail": {
+        "keywords": ["revenue", "units_sold"],
+        "kpis": {
+            "Total Revenue Generated": lambda df: df["revenue"].sum(),
+            "Average Revenue per Sale": lambda df: df["revenue"].mean(),
+            "Highest Revenue Sale": lambda df: df["revenue"].max(),
+            "Total Units Sold": lambda df: df["units_sold"].sum()
+        }
+    },
 
-    num_df = df_clean.select_dtypes(include="number")
+    "marketing": {
+        "keywords": ["spend"],
+        "kpis": {
+            "Total Marketing Spend": lambda df: df[[c for c in df.columns if "spend" in c]].sum().sum(),
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
+            "ROI (Revenue / Spend)": lambda df: (
+                df["revenue"].sum() / df[[c for c in df.columns if "spend" in c]].sum().sum()
+                if "revenue" in df else None
+            )
+        }
+    },
 
-    if len(num_df.columns) == 0:
-        st.warning("No numeric columns detected.")
-    else:
-        metrics = {
-            "Total of Main Metric": num_df.iloc[:,0].sum(),
-            "Average Value": num_df.iloc[:,0].mean(),
-            "Maximum Value": num_df.iloc[:,0].max(),
+    "inventory": {
+        "keywords": ["inventory_on_hand", "daily_demand"],
+        "kpis": {
+            "Average Daily Demand": lambda df: df["daily_demand"].mean(),
+            "Total Stockouts": lambda df: df["stockout_flag"].sum() if "stockout_flag" in df else None,
+            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean()
+        }
+    },
+
+    "finance": {
+        "keywords": ["profit", "expenses"],
+        "kpis": {
+            "Total Expenses": lambda df: df["expenses"].sum(),
+            "Total Profit": lambda df: df["profit"].sum() if "profit" in df else None,
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None
+        }
+    }
+}
+
+
+# ======================================================================
+# 4. DETECT KPI GROUP
+# ======================================================================
+def detect_kpi_group(df):
+    cols = df.columns
+    scores = {}
+
+    for group, rule in KPI_RULES.items():
+        score = sum(1 for kw in rule["keywords"] if kw in cols)
+        scores[group] = score
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else None
+
+
+# ======================================================================
+# 5. COMPUTE SEMANTIC KPIs
+# ======================================================================
+def compute_semantic_kpis(df):
+    group = detect_kpi_group(df)
+
+    if group is None:
+        num = df.select_dtypes(include="number")
+        if len(num.columns) == 0:
+            return {}
+        c = num.columns[0]
+        return {
+            f"Total {c.title()}": num[c].sum(),
+            f"Average {c.title()}": num[c].mean(),
+            f"Maximum {c.title()}": num[c].max()
         }
 
-        cols = st.columns(len(metrics))
+    kpi_funcs = KPI_RULES[group]["kpis"]
+    results = {}
 
-        for (label, value), col in zip(metrics.items(), cols):
-            with col:
-                st.markdown(
-                    f"""
-                    <div class='kpi-card'>
-                        <div class='kpi-label'>{label}</div>
-                        <div class='kpi-value'>{value:,.2f}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+    for label, fn in kpi_funcs.items():
+        try:
+            value = fn(df)
+            if value is not None:
+                results[label] = value
+        except:
+            pass
 
-
-# ------------------------------------------------------------
-# PAGE: DATA EXPLORER
-# ------------------------------------------------------------
-if page == "Data Explorer":
-    st.markdown("<div class='section-title'>Raw Data</div>", unsafe_allow_html=True)
-    st.dataframe(df_raw.head(100), use_container_width=True)
-
-    st.markdown("<div class='section-title'>Cleaned Data</div>", unsafe_allow_html=True)
-    st.dataframe(df_clean.head(100), use_container_width=True)
+    return results
 
 
-# ------------------------------------------------------------
-# PAGE: AI VISUALIZATIONS
-# ------------------------------------------------------------
-if page == "AI Visualizations":
-    st.markdown("<div class='section-title'>Recommended Visuals</div>", unsafe_allow_html=True)
+# ======================================================================
+# 6. AUTO CLEANING
+# ======================================================================
+def auto_clean_df(df):
+    df = df.copy()
 
-    sample = df_clean.head(40).to_csv(index=False)
+    df = df.loc[:, ~df.columns.str.contains("Unnamed")]
+
+    for col in df.columns:
+        if df[col].dtype == "object":
+            cleaned = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "")
+                .str.replace("$", "")
+                .str.replace("₹", "")
+                .str.replace("Rs", "")
+                .str.strip()
+            )
+            df[col] = pd.to_numeric(cleaned, errors="ignore")
+
+        if any(k in col.lower() for k in ["date", "week", "day"]):
+            df[col] = pd.to_datetime(df[col], errors="ignore")
+
+    return df
+
+
+# ======================================================================
+# 7. GPT ANALYSIS (SAFE)
+# ======================================================================
+def ask_gpt_for_analysis(df):
+    SAMPLE = df.head(40).to_csv(index=False)
 
     prompt = f"""
-You are a data visualization engine.
-Based on this dataset:
+You are a senior data analyst. Based only on the dataset sample below:
 
-{sample}
+{SAMPLE}
 
-Return only valid JSON with:
-- code for a function make_figures(df)
-- create 2–3 clean Plotly charts that are easy for small business owners.
+Return valid JSON with fields:
+1. cleaning_code — must define clean_df(df). Never read files. No pd.read_csv or write.
+2. eda_code — must define make_figures(df) and return a dict of Plotly figures only.
+   Rules:
+   - each dict value must be a plotly figure
+   - do not return numpy types, timestamps, or non-serializable objects
+   - no dataframes or lists inside the dict
+3. insights — business-friendly insights.
+
+Return ONLY valid JSON.
 """
 
     res = client.chat.completions.create(
@@ -176,64 +214,125 @@ Return only valid JSON with:
         messages=[{"role": "user", "content": prompt}]
     )
 
-    j = json.loads(res.choices[0].message.content.replace("```json", "").replace("```", ""))
-
-    figs = {}
-    exec(j["eda_code"], {"px": px, "pd": pd, "np": np}, figs)
-    out = figs["make_figures"](df_clean)
-
-    for f in out.values():
-        st.plotly_chart(f, use_container_width=True)
+    raw = res.choices[0].message.content
+    raw = raw.replace("```json", "").replace("```", "")
+    return json.loads(raw)
 
 
-# ------------------------------------------------------------
-# PAGE: INSIGHTS
-# ------------------------------------------------------------
-if page == "Insights":
-    st.markdown("<div class='section-title'>Key Takeaways</div>", unsafe_allow_html=True)
-
-    sample = df_clean.head(40).to_csv(index=False)
-
-    prompt = f"""
-Explain this data to a small business owner in simple English.
-Avoid jargon. Be specific and helpful.
-
-Data:
-{sample}
-
-Return 6–8 bullet points.
-"""
-
-    ans = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    st.markdown(ans.choices[0].message.content)
+# ======================================================================
+# 8. EXECUTE GPT CODE SAFELY
+# ======================================================================
+def run_dynamic_code(df, code, func_name):
+    local_vars = {}
+    exec(code, {"df": df, "px": px, "pd": pd, "np": np}, local_vars)
+    return local_vars[func_name](df)
 
 
-# ------------------------------------------------------------
-# PAGE: ASK YOUR DATA
-# ------------------------------------------------------------
-if page == "Ask Your Data":
-    st.markdown("<div class='section-title'>Ask Your Data</div>", unsafe_allow_html=True)
+# ======================================================================
+# 9. FILE UPLOAD
+# ======================================================================
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+if not uploaded:
+    st.stop()
 
-    question = st.text_input("Type a business question (e.g., 'Which channel works best?')")
+df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
 
-    if question:
-        sample = df_clean.head(40).to_csv(index=False)
 
-        qprompt = f"""
-Answer the question in plain English. 
-Dataset:
-{sample}
+# ======================================================================
+# 10. PREPROCESS + SEMANTIC ALIGNMENT
+# ======================================================================
+df_clean = auto_clean_df(df_raw)
+df_semantic = harmonize_columns(df_clean)
 
-Question: {question}
-"""
 
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": qprompt}]
+# ======================================================================
+# 11. EXECUTIVE SUMMARY KPI DISPLAY
+# ======================================================================
+st.subheader("Executive Summary")
+kpis = compute_semantic_kpis(df_semantic)
+
+cols = st.columns(len(kpis) if len(kpis) > 0 else 1)
+for (label, value), col in zip(kpis.items(), cols):
+    with col:
+        st.markdown(
+            f"""
+            <div style="padding:16px; border-radius:10px; background:#10141a; border:1px solid #1f2937;">
+                <div style="font-size:14px; color:#9ca3af;">{label}</div>
+                <div style="font-size:22px; font-weight:600; margin-top:6px; color:white;">
+                    {value:,.2f}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        st.markdown(resp.choices[0].message.content)
+
+# ======================================================================
+# 12. RAW + CLEANED PREVIEW
+# ======================================================================
+st.subheader("Raw Data")
+st.dataframe(df_raw.head(50), use_container_width=True)
+
+st.subheader("Cleaned and Semantic-Aligned Data")
+st.dataframe(df_semantic.head(50), use_container_width=True)
+
+
+# ======================================================================
+# 13. GPT AUTO ANALYSIS
+# ======================================================================
+st.subheader("GPT Auto EDA")
+
+if st.button("Run GPT Analysis"):
+    with st.spinner("Processing..."):
+        gpt = ask_gpt_for_analysis(df_semantic)
+
+    st.success("Completed")
+
+    st.subheader("Insights")
+    st.write(gpt["insights"])
+
+    df2 = run_dynamic_code(df_semantic, gpt["cleaning_code"], "clean_df")
+    figures = run_dynamic_code(df2, gpt["eda_code"], "make_figures")
+
+    st.subheader("Charts")
+
+    for name, fig in figures.items():
+        try:
+            if hasattr(fig, "to_plotly_json"):
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"Skipping invalid figure: {name}")
+        except Exception as e:
+            st.warning(f"Error rendering figure {name}: {e}")
+
+
+# ======================================================================
+# 14. ASK QUESTIONS ABOUT DATA
+# ======================================================================
+st.subheader("Ask Questions About This Dataset")
+
+q = st.text_area("Enter your question")
+
+if st.button("Ask"):
+    if q.strip() == "":
+        st.warning("Please enter a question.")
+    else:
+        with st.spinner("Thinking..."):
+            sample = df_semantic.head(50).to_csv(index=False)
+
+            prompt = f"""
+You are a business data analyst.
+Dataset sample:
+{sample}
+
+Question: {q}
+
+Answer clearly in plain business language.
+"""
+
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+        st.write(resp.choices[0].message.content)
