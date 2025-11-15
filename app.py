@@ -1,7 +1,5 @@
-# InsightHub 3.0 – GPT-powered Auto EDA
-# Uses OpenAI v1 Python client and ast.literal_eval to avoid JSON issues.
+# InsightHub 4.0 – Universal Cleaner + Safe EDA + GPT Insights (OpenAI v1)
 
-import ast
 import json
 from io import StringIO
 
@@ -13,9 +11,9 @@ import plotly.io as pio
 import streamlit as st
 from openai import OpenAI
 
-# ------------------ page config & theme ------------------ #
+# ------------------ Page config & basic theme ------------------ #
 st.set_page_config(
-    page_title="InsightHub – GPT Auto EDA",
+    page_title="InsightHub 4.0 – GPT Auto EDA",
     page_icon="📊",
     layout="wide",
 )
@@ -25,37 +23,37 @@ pio.templates.default = "plotly_dark"
 st.markdown(
     """
 <style>
-    body { font-family: "Inter", system-ui, sans-serif; }
-    .block-container { padding-top: 1.2rem; }
-    .card {
-        background: #0f172a;
-        padding: 1rem 1.25rem;
-        border-radius: 16px;
-        border: 1px solid #1e293b;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background: #020617;
-        padding: 0.75rem 1rem;
-        border-radius: 14px;
-        border: 1px solid #1f2937;
-    }
-    .metric-label {
-        font-size: 0.8rem;
-        color: #9ca3af;
-    }
-    .metric-value {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: #e5e7eb;
-    }
+body { font-family: "Inter", system-ui, sans-serif; }
+.block-container { padding-top: 1.1rem; }
+.card {
+    background: #0f172a;
+    padding: 1rem 1.25rem;
+    border-radius: 16px;
+    border: 1px solid #1e293b;
+    margin-bottom: 1rem;
+}
+.metric-card {
+    background: #020617;
+    padding: 0.75rem 1rem;
+    border-radius: 14px;
+    border: 1px solid #1f2937;
+}
+.metric-label {
+    font-size: 0.8rem;
+    color: #9ca3af;
+}
+.metric-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #e5e7eb;
+}
 </style>
-    """,
+""",
     unsafe_allow_html=True,
 )
 
-st.title("📊 InsightHub 3.0 – GPT Auto EDA")
-st.caption("Upload a dataset → AI cleans it → AI builds charts → Ask questions in plain English.")
+st.title("📊 InsightHub 4.0 – GPT Auto EDA")
+st.caption("Upload a dataset → Universal cleaning → Safe EDA → GPT insights + Q&A.")
 
 # ------------------ OpenAI client ------------------ #
 api_key = st.secrets.get("OPENAI_API_KEY", None)
@@ -66,109 +64,150 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 
-# ------------------ helper functions ------------------ #
-def dataframe_profile(df: pd.DataFrame, sample_rows: int = 200) -> str:
-    """Create a compact textual profile of the dataframe for GPT."""
-    sample = df.head(sample_rows)
-    profile = {
-        "shape": list(df.shape),
-        "columns": list(df.columns),
-        "dtypes": {c: str(df[c].dtype) for c in df.columns},
-        "missing": df.isna().sum().to_dict(),
-        "sample_csv": sample.to_csv(index=False),
+# ------------------ Universal Cleaning Engine ------------------ #
+def auto_clean_df(df: pd.DataFrame):
+    """
+    Universal cleaning function for real-world messy data.
+
+    Handles:
+    - Unnamed columns
+    - All-null rows
+    - Currency symbols ($, ₹), commas, %
+    - Accounting negatives (e.g., (500) → -500)
+    - Object columns that are numeric-like or datetime-like
+    - Inf / -inf
+    Returns:
+      cleaned_df, cleaning_info (dict of what changed)
+    """
+    df = df.copy()
+    info = {
+        "dropped_columns": [],
+        "rows_dropped_all_null": 0,
+        "numeric_converted": [],
+        "datetime_converted": [],
     }
-    return json.dumps(profile, indent=2)
+
+    # Strip column name whitespace
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Drop "Unnamed" columns from Excel
+    mask_unnamed = df.columns.str.contains("^unnamed", case=False, regex=True)
+    dropped = df.columns[mask_unnamed].tolist()
+    if dropped:
+        info["dropped_columns"].extend(dropped)
+        df = df.loc[:, ~mask_unnamed]
+
+    # Drop fully empty rows
+    before_rows = len(df)
+    df = df.dropna(how="all")
+    info["rows_dropped_all_null"] = before_rows - len(df)
+
+    # Replace obvious inf values
+    df = df.replace([np.inf, -np.inf], np.nan)
+
+    # Handle object columns: try datetime first, then numeric-like
+    obj_cols = df.select_dtypes(include=["object"]).columns.tolist()
+    for col in obj_cols:
+        s = df[col].astype(str).str.strip()
+
+        # Try datetime
+        dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+        if dt.notna().mean() >= 0.7:  # 70% convertible → treat as date
+            df[col] = dt
+            info["datetime_converted"].append(col)
+            continue
+
+        # Try numeric-like: remove $, ₹, %, commas, parentheses for negatives
+        cleaned = (
+            s.str.replace(r"\((.*)\)", r"-\1", regex=True)  # (500) → -500
+            .str.replace("[₹$,]", "", regex=True)
+            .str.replace("%", "", regex=False)
+            .str.replace(r"\s+", "", regex=True)
+        )
+        cleaned = cleaned.replace("", np.nan)
+
+        num = pd.to_numeric(cleaned, errors="coerce")
+        if num.notna().mean() >= 0.5:  # at least 50% appear numeric
+            df[col] = num
+            info["numeric_converted"].append(col)
+
+    # Final inf cleanup
+    df = df.replace([np.inf, -np.inf], np.nan)
+
+    return df, info
 
 
-def detect_date_col(df: pd.DataFrame):
+def detect_date_column(df: pd.DataFrame):
     for col in df.columns:
-        low = col.lower()
-        if any(k in low for k in ["date", "week", "day", "month", "year"]):
+        if np.issubdtype(df[col].dtype, np.datetime64):
+            return col
+        name = str(col).lower()
+        if any(k in name for k in ["date", "day", "week", "month", "year"]):
             try:
-                pd.to_datetime(df[col])
-                return col
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                if parsed.notna().mean() > 0.6:
+                    return col
             except Exception:
                 continue
     return None
 
 
-def detect_target_col(df: pd.DataFrame):
+def detect_target_column(df: pd.DataFrame):
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    priority = [
-        "revenue",
-        "sales",
-        "amount",
-        "gmv",
-        "turnover",
-        "profit",
-        "value",
-        "total",
-    ]
+    if not numeric_cols:
+        return None
+    priority = ["revenue", "sales", "amount", "gmv", "turnover", "profit", "value", "total"]
     for col in numeric_cols:
-        l = col.lower()
-        if any(p in l for p in priority):
+        low = str(col).lower()
+        if any(p in low for p in priority):
             return col
-    return numeric_cols[-1] if numeric_cols else None
+    # fallback: numeric column with highest variance
+    return df[numeric_cols].var().sort_values(ascending=False).index[0]
 
 
-def call_gpt_for_eda(df: pd.DataFrame) -> dict:
+def build_profile_for_gpt(df: pd.DataFrame, info: dict, max_rows: int = 200) -> str:
+    sample = df.head(max_rows)
+    profile = {
+        "shape": list(df.shape),
+        "columns": list(df.columns),
+        "dtypes": {c: str(df[c].dtype) for c in df.columns},
+        "cleaning_info": info,
+        "missing_counts": df.isna().sum().to_dict(),
+        "sample_csv": sample.to_csv(index=False),
+    }
+    return json.dumps(profile, indent=2)
+
+
+# ------------------ GPT: Insights on cleaned data ------------------ #
+def call_gpt_insights(df_clean: pd.DataFrame, cleaning_info: dict) -> str:
     """
-    Ask GPT to return a Python dict literal with:
-      - cleaning_code: defines clean_df(df)
-      - eda_code: defines make_figures(df)
-      - insights: bullet text
-    We parse with ast.literal_eval to avoid JSON escaping issues.
+    Ask GPT for English-language insights & recommendations only.
+    No code execution from GPT.
     """
-    profile_text = dataframe_profile(df)
+    profile = build_profile_for_gpt(df_clean, cleaning_info)
 
     system_msg = """
-You are a senior data analyst and Python expert.
+You are a senior business data analyst.
 
-You will receive a JSON description of a pandas DataFrame called df.
+You will get a JSON summary of a cleaned pandas DataFrame.
+Your job is to write a clear, business-friendly narrative.
 
-You MUST return a single valid Python dict literal, NOT JSON, NOT markdown.
-No backticks. No ```json blocks. No comments outside the dict.
+Respond ONLY in Markdown with:
+- 5–10 bullet points of key insights.
+- Then a section "Recommended next analyses" with 3–5 suggestions.
 
-Return exactly:
-
-{
-  "cleaning_code": "...python code string...",
-  "eda_code": "...python code string...",
-  "insights": "...markdown bullet list..."
-}
-
-Rules for cleaning_code:
-- It MUST define:  def clean_df(df):  ...  return df
-- Do NOT read files from disk (no pd.read_csv).
-- The input DataFrame is already named df.
-- Handle monetary / numeric strings: strip '$', '₹', ',', '%', whitespace,
-  then convert to numeric where appropriate using pd.to_numeric(..., errors="ignore").
-- Drop columns whose name starts with 'Unnamed'.
-- Try to parse obvious date-like columns to datetime.
-
-Rules for eda_code:
-- It MUST define:  def make_figures(df): ... return figures
-- figures MUST be a dict: { "chart_title": plotly_figure, ... }
-- Use ONLY plotly.express or plotly.graph_objects.
-- Create at least 5–8 insightful charts, e.g.:
-    * time series of main metric over date/week
-    * correlation heatmap
-    * top 2 scatter plots (e.g. spends vs revenue)
-    * channel breakdown bar chart(s)
-    * distribution / boxplots to show outliers
-- Assume df is already cleaned by clean_df.
-
-Rules for insights:
-- Markdown bullet list of 5–10 bullets.
-- Each bullet = clear business takeaway from the EDA.
-
-Again: respond ONLY with a valid Python dict literal. No markdown fences.
+Focus on:
+- Trends over time if a date/week column exists.
+- Which metrics move together (high correlation).
+- Which categories (channels, segments, etc.) over- or under-perform.
+- Outliers, anomalies, or suspicious data quality issues.
+Do NOT output any Python code.
 """
 
     user_msg = f"""
-Here is a structured description of the DataFrame:
+Here is the dataset profile:
 
-{profile_text}
+{profile}
 """
 
     resp = client.chat.completions.create(
@@ -177,117 +216,225 @@ Here is a structured description of the DataFrame:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.2,
+        temperature=0.25,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ------------------ GPT: Ask-the-data Q&A ------------------ #
+def call_gpt_qa(df_clean: pd.DataFrame, insights_md: str, question: str) -> str:
+    sample = df_clean.head(200).to_csv(index=False)
+    system_msg = """
+You are a helpful data analyst assistant.
+You answer questions about the dataset using the sample and the prior insights.
+
+If something cannot be seen clearly from the sample, say so honestly.
+Always answer in clear, structured Markdown.
+"""
+    user_msg = f"""
+CLEANED DATA SAMPLE (CSV):
+{sample}
+
+EARLIER INSIGHTS:
+{insights_md}
+
+QUESTION:
+{question}
+"""
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.3,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ------------------ EDA visualization helpers (no GPT) ------------------ #
+def compute_kpis(df: pd.DataFrame):
+    target = detect_target_column(df)
+    if not target:
+        return {}
+    series = df[target].dropna()
+    if series.empty:
+        return {}
+    return {
+        "target_col": target,
+        "sum": float(series.sum()),
+        "mean": float(series.mean()),
+        "min": float(series.min()),
+        "max": float(series.max()),
+    }
+
+
+def render_kpi_cards(kpis: dict):
+    if not kpis:
+        st.write("No numeric target detected for KPIs.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(
+        f'<div class="metric-card"><div class="metric-label">Target Metric</div>'
+        f'<div class="metric-value">{kpis["target_col"]}</div></div>',
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        f'<div class="metric-card"><div class="metric-label">Total</div>'
+        f'<div class="metric-value">{kpis["sum"]:,.2f}</div></div>',
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        f'<div class="metric-card"><div class="metric-label">Average</div>'
+        f'<div class="metric-value">{kpis["mean"]:,.2f}</div></div>',
+        unsafe_allow_html=True,
+    )
+    c4.markdown(
+        f'<div class="metric-card"><div class="metric-label">Max</div>'
+        f'<div class="metric-value">{kpis["max"]:,.2f}</div></div>',
+        unsafe_allow_html=True,
     )
 
-    text = resp.choices[0].message.content.strip()
 
-    # strip accidental fences if any
-    if text.startswith("```"):
-        # take content between first and last fence
-        parts = text.split("```")
-        if len(parts) >= 2:
-            text = parts[1].strip()
-
-    try:
-        result = ast.literal_eval(text)
-    except Exception as e:
-        st.error("Failed to parse GPT response as Python dict.")
-        st.code(text)
-        raise e
-
-    required_keys = {"cleaning_code", "eda_code", "insights"}
-    if not required_keys.issubset(result.keys()):
-        raise ValueError(f"GPT output missing keys: {required_keys - set(result.keys())}")
-
-    return result, text
+def make_missing_bar(df: pd.DataFrame):
+    missing = df.isna().sum()
+    missing = missing[missing > 0]
+    if missing.empty:
+        return None
+    mdf = missing.reset_index()
+    mdf.columns = ["column", "missing"]
+    fig = px.bar(
+        mdf,
+        x="column",
+        y="missing",
+        title="Missing Values per Column",
+        text="missing",
+    )
+    fig.update_layout(xaxis_tickangle=-45)
+    return fig
 
 
-def run_cleaning(df_raw: pd.DataFrame, cleaning_code: str) -> pd.DataFrame:
-    """Execute GPT cleaning code."""
-    env = {"pd": pd, "np": np}
-    local_vars = {"df": df_raw.copy()}
-    try:
-        exec(cleaning_code, env, local_vars)
-    except Exception as e:
-        st.error("Error while executing cleaning_code.")
-        st.code(cleaning_code)
-        raise e
-
-    if "clean_df" in local_vars:
-        cleaned = local_vars["clean_df"](df_raw.copy())
-    elif "df" in local_vars:
-        cleaned = local_vars["df"]
-    else:
-        cleaned = df_raw.copy()
-
-    if not isinstance(cleaned, pd.DataFrame):
-        raise ValueError("cleaning_code did not return a DataFrame.")
-    return cleaned
+def make_corr_heatmap(df: pd.DataFrame):
+    num_df = df.select_dtypes(include=[np.number])
+    if num_df.shape[1] < 2:
+        return None
+    corr = num_df.corr().round(2)
+    fig = px.imshow(
+        corr,
+        text_auto=True,
+        aspect="auto",
+        title="Correlation Heatmap (Numeric Columns)",
+        color_continuous_scale="RdBu",
+        zmin=-1,
+        zmax=1,
+    )
+    return fig
 
 
-def run_eda_code(df_clean: pd.DataFrame, eda_code: str):
-    """Execute GPT EDA code to obtain dict of figures."""
-    env = {"pd": pd, "np": np, "px": px, "go": go}
-    local_vars = {}
-    try:
-        exec(eda_code, env, local_vars)
-    except Exception as e:
-        st.error("Error while executing eda_code.")
-        st.code(eda_code)
-        raise e
-
-    if "make_figures" not in local_vars:
-        raise ValueError("eda_code did not define make_figures(df).")
-
-    figures = local_vars["make_figures"](df_clean.copy())
-    if isinstance(figures, list):
-        # convert to dict with generic titles
-        figures = {f"Chart {i+1}": f for i, f in enumerate(figures)}
-
-    return figures
+def make_target_distribution(df: pd.DataFrame):
+    target = detect_target_column(df)
+    if not target or target not in df.columns:
+        return None
+    if not np.issubdtype(df[target].dtype, np.number):
+        return None
+    fig = px.histogram(
+        df,
+        x=target,
+        nbins=30,
+        title=f"Distribution of {target}",
+    )
+    return fig
 
 
-def quick_kpis(df: pd.DataFrame):
-    """Compute simple KPIs based on detected target column."""
-    target = detect_target_col(df)
-    out = {}
-    if target and target in df.columns and np.issubdtype(df[target].dtype, np.number):
-        series = df[target].dropna()
-        if not series.empty:
-            out["target_col"] = target
-            out["sum"] = float(series.sum())
-            out["mean"] = float(series.mean())
-            out["min"] = float(series.min())
-            out["max"] = float(series.max())
-    return out
+def make_time_series(df: pd.DataFrame):
+    date_col = detect_date_column(df)
+    target = detect_target_column(df)
+    if not date_col or not target:
+        return None
+    if not np.issubdtype(df[target].dtype, np.number):
+        return None
+    tmp = df[[date_col, target]].dropna()
+    if tmp.empty:
+        return None
+    tmp = tmp.sort_values(by=date_col)
+    fig = px.line(
+        tmp,
+        x=date_col,
+        y=target,
+        title=f"{target} over Time ({date_col})",
+    )
+    return fig
 
 
-def display_kpi_cards(kpis: dict):
-    cols = st.columns(4)
-    if not kpis:
-        st.write("No numeric target column detected for KPIs.")
-        return
-    cols[0].markdown('<div class="metric-card"><div class="metric-label">Target</div>'
-                     f'<div class="metric-value">{kpis["target_col"]}</div></div>',
-                     unsafe_allow_html=True)
-    cols[1].markdown('<div class="metric-card"><div class="metric-label">Total</div>'
-                     f'<div class="metric-value">{kpis["sum"]:,.2f}</div></div>',
-                     unsafe_allow_html=True)
-    cols[2].markdown('<div class="metric-card"><div class="metric-label">Average</div>'
-                     f'<div class="metric-value">{kpis["mean"]:,.2f}</div></div>',
-                     unsafe_allow_html=True)
-    cols[3].markdown('<div class="metric-card"><div class="metric-label">Max</div>'
-                     f'<div class="metric-value">{kpis["max"]:,.2f}</div></div>',
-                     unsafe_allow_html=True)
+def make_category_breakdown(df: pd.DataFrame):
+    target = detect_target_column(df)
+    if not target or target not in df.columns:
+        return None
+    if not np.issubdtype(df[target].dtype, np.number):
+        return None
+
+    cat_cols = []
+    for col in df.columns:
+        if col == target:
+            continue
+        if df[col].dtype == "object" or str(df[col].dtype).startswith("category"):
+            nunique = df[col].nunique(dropna=True)
+            if 2 <= nunique <= 20:
+                cat_cols.append((col, nunique))
+
+    if not cat_cols:
+        return None
+
+    # choose the smallest cardinality dimension for clean bar chart
+    cat_cols = sorted(cat_cols, key=lambda x: x[1])
+    cat_col = cat_cols[0][0]
+
+    tmp = df.groupby(cat_col)[target].mean().reset_index()
+    tmp = tmp.sort_values(by=target, ascending=False)
+    fig = px.bar(
+        tmp,
+        x=cat_col,
+        y=target,
+        title=f"Average {target} by {cat_col}",
+        text_auto=".2f",
+    )
+    fig.update_layout(xaxis_tickangle=-45)
+    return fig
 
 
-# ------------------ sidebar: upload ------------------ #
+def make_top_scatter(df: pd.DataFrame):
+    target = detect_target_column(df)
+    if not target or target not in df.columns:
+        return None
+
+    num_df = df.select_dtypes(include=[np.number]).drop(columns=[target], errors="ignore")
+    if num_df.shape[1] < 1:
+        return None
+
+    # choose feature with highest abs correlation with target
+    corr = num_df.corrwith(df[target]).abs().sort_values(ascending=False)
+    feature = corr.index[0]
+    tmp = df[[feature, target]].dropna()
+    if tmp.empty:
+        return None
+    fig = px.scatter(
+        tmp,
+        x=feature,
+        y=target,
+        trendline="ols",
+        title=f"{feature} vs {target}",
+    )
+    return fig
+
+
+# ------------------ Sidebar: upload + controls ------------------ #
 st.sidebar.header("📂 Upload Data")
 uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 if not uploaded:
-    st.info("Upload a CSV or Excel file to begin.")
+    st.info("Upload a dataset to begin.")
     st.stop()
 
 if uploaded.name.lower().endswith(".csv"):
@@ -295,30 +442,27 @@ if uploaded.name.lower().endswith(".csv"):
 else:
     df_raw = pd.read_excel(uploaded)
 
-# ------------------ raw preview ------------------ #
+# ------------------ Raw preview ------------------ #
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("📄 Raw Data Preview")
 st.dataframe(df_raw.head(200), use_container_width=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
-# ------------------ run GPT (cached for this file) ------------------ #
+
+# ------------------ Run universal cleaner + GPT (cached) ------------------ #
 @st.cache_data(show_spinner=False)
-def run_gpt_pipeline(data: pd.DataFrame):
-    eda_bundle, raw_text = call_gpt_for_eda(data)
-    cleaned = run_cleaning(data, eda_bundle["cleaning_code"])
-    figures = run_eda_code(cleaned, eda_bundle["eda_code"])
-    insights_md = eda_bundle["insights"]
-    return cleaned, figures, insights_md, eda_bundle, raw_text
+def run_pipeline(data: pd.DataFrame):
+    cleaned, info = auto_clean_df(data)
+    insights_md = call_gpt_insights(cleaned, info)
+    return cleaned, info, insights_md
 
 
-with st.spinner("🤖 Letting GPT analyze and design your EDA..."):
-    df_clean, gpt_figures, gpt_insights, gpt_bundle, gpt_raw_text = run_gpt_pipeline(
-        df_raw
-    )
+with st.spinner("🧹 Cleaning data + asking GPT for insights..."):
+    df_clean, clean_info, gpt_insights = run_pipeline(df_raw)
 
-# ------------------ layout: tabs ------------------ #
+# ------------------ Tabs layout ------------------ #
 tab_overview, tab_charts, tab_insights, tab_ask = st.tabs(
-    ["📌 Overview", "📊 Charts", "🧠 Insights & Recommendations", "💬 Ask the Data (AI)"]
+    ["📌 Overview", "📊 Charts", "🧠 GPT Insights", "💬 Ask the Data"]
 )
 
 # ---- Overview tab ---- #
@@ -329,115 +473,86 @@ with tab_overview:
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📈 Key Metrics (Auto-detected)")
-    kpis = quick_kpis(df_clean)
-    display_kpi_cards(kpis)
+    st.subheader("📈 Key Metrics")
+    kpis = compute_kpis(df_clean)
+    render_kpi_cards(kpis)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("🧮 Dataset Summary")
+    st.subheader("🧮 Data Quality Summary")
     col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Shape**:", df_clean.shape)
-        st.write("**Columns:**", ", ".join(df_clean.columns))
-    with col2:
-        st.write("**Dtypes:**")
-        st.write(df_clean.dtypes.astype(str))
-    st.markdown("</div>", unsafe_allow_html=True)
 
+    with col1:
+        st.write("**Shape:**", df_clean.shape)
+        st.write("**Dropped columns:**", clean_info["dropped_columns"] or "None")
+        st.write("**Rows dropped (all null):**", clean_info["rows_dropped_all_null"])
+
+    with col2:
+        st.write("**Converted to numeric:**", clean_info["numeric_converted"] or "None")
+        st.write("**Converted to datetime:**", clean_info["datetime_converted"] or "None")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ---- Charts tab ---- #
 with tab_charts:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📊 GPT Recommended Visualizations")
-    if not gpt_figures:
-        st.write("GPT did not return any charts.")
+    st.subheader("📊 Exploratory Charts (Safe & Deterministic)")
+
+    figs = []
+
+    ts_fig = make_time_series(df_clean)
+    if ts_fig:
+        figs.append(("Time Series", ts_fig))
+
+    dist_fig = make_target_distribution(df_clean)
+    if dist_fig:
+        figs.append(("Target Distribution", dist_fig))
+
+    miss_fig = make_missing_bar(df_clean)
+    if miss_fig:
+        figs.append(("Missing Values", miss_fig))
+
+    corr_fig = make_corr_heatmap(df_clean)
+    if corr_fig:
+        figs.append(("Correlation Heatmap", corr_fig))
+
+    cat_fig = make_category_breakdown(df_clean)
+    if cat_fig:
+        figs.append(("Category Breakdown", cat_fig))
+
+    scatter_fig = make_top_scatter(df_clean)
+    if scatter_fig:
+        figs.append(("Top Scatter", scatter_fig))
+
+    if not figs:
+        st.write("Not enough structure in the data to build charts automatically.")
     else:
-        for name, fig in gpt_figures.items():
-            if isinstance(fig, (go.Figure,)):
-                st.markdown(f"### {name.replace('_', ' ').title()}")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.write(f"Skipping non-figure for key: {name}")
+        for title, fig in figs:
+            st.markdown(f"### {title}")
+            st.plotly_chart(fig, use_container_width=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-    with st.expander("🔧 View GPT EDA Code"):
-        st.write("**Cleaning code (clean_df)**")
-        st.code(gpt_bundle["cleaning_code"], language="python")
-        st.write("**EDA code (make_figures)**")
-        st.code(gpt_bundle["eda_code"], language="python")
-
-
-# ---- Insights tab ---- #
+# ---- GPT Insights tab ---- #
 with tab_insights:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("🧠 GPT Insights (Business Interpretation)")
+    st.subheader("🧠 GPT Insights & Recommendations")
     st.markdown(gpt_insights)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Simple extra: our own correlation insight
-    num_df = df_clean.select_dtypes(include=[np.number])
-    if num_df.shape[1] >= 2:
-        corr = num_df.corr()
-        stacked = corr.where(~np.eye(len(corr), dtype=bool)).stack()
-        if not stacked.empty:
-            top_pair = stacked.abs().sort_values(ascending=False).head(1)
-            (c1, c2), val = top_pair.index[0], top_pair.iloc[0]
-            st.markdown(
-                f"> 🔍 Extra Insight: The strongest numeric relationship is between **{c1}** and **{c2}** "
-                f"with correlation **{val:.2f}**. Consider exploring this relationship deeper."
-            )
-
-
-# ---- Ask-the-data tab ---- #
+# ---- Ask the Data tab ---- #
 with tab_ask:
     st.subheader("💬 Ask Questions About This Data")
 
-    user_q = st.text_area(
-        "Type a question (examples: 'Which channels look most efficient?', 'Any signs of saturation?', 'How do holidays affect revenue?')",
-        height=100,
+    question = st.text_area(
+        "Ask anything (e.g., 'Which channels seem most efficient?', "
+        "'Any anomalies in revenue?', 'What should I investigate next?')",
+        height=120,
     )
     ask_btn = st.button("Ask AI")
 
-    if ask_btn and user_q.strip():
-        # build a small context sample
-        sample_csv = df_clean.head(200).to_csv(index=False)
-        qa_system = """
-You are a data analyst assistant. Answer questions about the user's dataset.
-
-You will be given:
-- A small CSV sample of the cleaned DataFrame.
-- The high-level GPT insights already generated.
-
-Your job:
-- Answer in clear, structured Markdown.
-- Refer to trends, channels, correlations, segments.
-- If something is unclear or not visible from the sample, say so honestly.
-"""
-        qa_user = f"""
-CLEANED DATA SAMPLE (CSV):
-{sample_csv}
-
-EARLIER INSIGHTS:
-{gpt_insights}
-
-QUESTION:
-{user_q}
-"""
-
-        with st.spinner("Thinking about your question..."):
-            qa_resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": qa_system},
-                    {"role": "user", "content": qa_user},
-                ],
-                temperature=0.3,
-            )
-        answer = qa_resp.choices[0].message.content.strip()
+    if ask_btn and question.strip():
+        with st.spinner("Thinking..."):
+            answer = call_gpt_qa(df_clean, gpt_insights, question)
         st.markdown("### 🔎 Answer")
         st.markdown(answer)
-
-    st.markdown("---")
-    with st.expander("Debug: raw GPT EDA response text"):
-        st.code(gpt_raw_text, language="python")
