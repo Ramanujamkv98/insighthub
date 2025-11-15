@@ -1,6 +1,6 @@
 # ======================================================================
-# InsightHub 6.1.2 – Semantic KPI Edition (No Emojis)
-# GPT Auto EDA + Semantic KPI Detection + Dataset Classification
+# InsightHub 6.1.3 – Semantic KPI Edition
+# Fully fixed version – No emojis – Streamlit Cloud Compatible
 # ======================================================================
 
 import streamlit as st
@@ -11,27 +11,26 @@ from openai import OpenAI
 import json
 import re
 
-# ==========================================
+# ======================================================================
 # STREAMLIT CONFIG
-# ==========================================
+# ======================================================================
 st.set_page_config(
-    page_title="InsightHub 6.1.2 – Semantic Auto EDA",
-    page_icon="📊",  # System emoji is allowed because it's part of Streamlit icon metadata. Remove if needed.
+    page_title="InsightHub 6.1.3 – Semantic Auto EDA",
     layout="wide",
 )
 
-st.title("InsightHub 6.1.2 – Semantic Auto EDA")
-st.caption("Upload dataset → Semantic cleaning → Business KPIs → GPT EDA → Chat with the data")
+st.title("InsightHub 6.1.3 – Semantic Auto EDA")
+st.caption("Upload dataset → Semantic cleaning → Business KPIs → GPT EDA → Ask questions")
 
 
-# ==========================================
-# GPT CLIENT
-# ==========================================
+# ======================================================================
+# OPENAI CLIENT
+# ======================================================================
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 # ======================================================================
-# 1. SEMANTIC MAP (Synonym-based Understanding)
+# 1. SEMANTIC MAP
 # ======================================================================
 SEMANTIC_MAP = {
     "revenue": ["revenue", "sales", "gmv", "amount", "amt", "rev", "turnover", "income"],
@@ -50,7 +49,7 @@ SEMANTIC_MAP = {
 
 
 # ======================================================================
-# 2. COLUMN SEMANTIC ALIGNMENT
+# 2. SEMANTIC COLUMN RENAMING
 # ======================================================================
 def semantic_match(col):
     col_l = col.lower()
@@ -100,23 +99,23 @@ KPI_RULES = {
         "kpis": {
             "Average Daily Demand": lambda df: df["daily_demand"].mean(),
             "Total Stockouts": lambda df: df["stockout_flag"].sum() if "stockout_flag" in df else None,
-            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean()
+            "Average Inventory on Hand": lambda df: df["inventory_onhand"].mean()
         }
     },
 
     "finance": {
         "keywords": ["profit", "expenses"],
         "kpis": {
-            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
             "Total Expenses": lambda df: df["expenses"].sum(),
-            "Net Profit": lambda df: df["profit"].sum() if "profit" in df else None
+            "Total Profit": lambda df: df["profit"].sum() if "profit" in df else None,
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None
         }
     }
 }
 
 
 # ======================================================================
-# 4. Detect Dataset Type (Auto)
+# 4. DETECT KPI GROUP
 # ======================================================================
 def detect_kpi_group(df):
     cols = df.columns
@@ -131,7 +130,7 @@ def detect_kpi_group(df):
 
 
 # ======================================================================
-# 5. Compute KPIs (Semantic + Rule Engine)
+# 5. COMPUTE SEMANTIC KPIs
 # ======================================================================
 def compute_semantic_kpis(df):
     group = detect_kpi_group(df)
@@ -162,7 +161,7 @@ def compute_semantic_kpis(df):
 
 
 # ======================================================================
-# 6. Auto Clean (currency, dates, unnamed)
+# 6. AUTO CLEANING
 # ======================================================================
 def auto_clean_df(df):
     df = df.copy()
@@ -189,20 +188,20 @@ def auto_clean_df(df):
 
 
 # ======================================================================
-# 7. GPT Auto EDA
+# 7. GPT ANALYSIS
 # ======================================================================
 def ask_gpt_for_analysis(df):
     SAMPLE = df.head(40).to_csv(index=False)
 
     prompt = f"""
-You are a senior data analyst. Based on this dataset sample:
+You are a senior data analyst. Based only on the dataset sample below:
 
 {SAMPLE}
 
-Write JSON with:
-1. cleaning_code - safe pandas cleaning code
-2. eda_code - 3 to 5 plotly charts
-3. insights - simple English insights for business owners
+Return valid JSON with fields:
+1. cleaning_code — must define clean_df(df). Do not read or write any files. Never use pd.read_csv.
+2. eda_code — must define make_figures(df) returning a dict of Plotly charts.
+3. insights — business-friendly insights.
 
 Return only valid JSON.
 """
@@ -218,7 +217,7 @@ Return only valid JSON.
 
 
 # ======================================================================
-# 8. Execute GPT Code Safely
+# 8. EXECUTE GPT CODE SAFELY
 # ======================================================================
 def run_dynamic_code(df, code, func_name):
     local_vars = {}
@@ -227,7 +226,7 @@ def run_dynamic_code(df, code, func_name):
 
 
 # ======================================================================
-# 9. Sidebar Upload
+# 9. FILE UPLOAD
 # ======================================================================
 uploaded = st.sidebar.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
 if not uploaded:
@@ -237,14 +236,14 @@ df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_ex
 
 
 # ======================================================================
-# 10. Preprocess + Semantic Cleaning
+# 10. PREPROCESS + SEMANTIC ALIGNMENT
 # ======================================================================
 df_clean = auto_clean_df(df_raw)
 df_semantic = harmonize_columns(df_clean)
 
 
 # ======================================================================
-# 11. Executive Summary (Semantic KPIs)
+# 11. EXECUTIVE SUMMARY KPI DISPLAY
 # ======================================================================
 st.subheader("Executive Summary")
 kpis = compute_semantic_kpis(df_semantic)
@@ -266,7 +265,7 @@ for (label, value), col in zip(kpis.items(), cols):
 
 
 # ======================================================================
-# 12. Raw + Cleaned Preview
+# 12. RAW + CLEANED PREVIEW
 # ======================================================================
 st.subheader("Raw Data")
 st.dataframe(df_raw.head(50), use_container_width=True)
@@ -276,7 +275,7 @@ st.dataframe(df_semantic.head(50), use_container_width=True)
 
 
 # ======================================================================
-# 13. GPT Auto Analysis
+# 13. GPT AUTO ANALYSIS
 # ======================================================================
 st.subheader("GPT Auto EDA")
 
@@ -284,7 +283,7 @@ if st.button("Run GPT Analysis"):
     with st.spinner("Processing..."):
         gpt = ask_gpt_for_analysis(df_semantic)
 
-    st.success("Completed.")
+    st.success("Completed")
 
     st.subheader("Insights")
     st.write(gpt["insights"])
@@ -298,7 +297,7 @@ if st.button("Run GPT Analysis"):
 
 
 # ======================================================================
-# 14. Ask Questions About the Data
+# 14. ASK QUESTIONS ABOUT THE DATA
 # ======================================================================
 st.subheader("Ask Questions About This Dataset")
 
@@ -309,9 +308,21 @@ if st.button("Ask"):
         st.warning("Please enter a question.")
     else:
         with st.spinner("Thinking..."):
-            prompt = f"Dataset:\n{df_semantic.head(50).to_markdown()}\n\nQuestion: {q}\nExplain the answer in simple business language."
+            sample = df_semantic.head(50).to_csv(index=False)
+
+            prompt = f"""
+You are a business data analyst.
+Dataset sample:
+{sample}
+
+Question: {q}
+
+Answer clearly in plain business language.
+"""
+
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}]
             )
+
         st.write(resp.choices[0].message.content)
