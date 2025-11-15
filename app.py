@@ -1,5 +1,7 @@
 # ======================================================================
-# DataPilot 6.1.4 – Semantic KPI Edition (Clean Code, No Hidden Unicode)
+# DataPilot 6.1.5 – Stable Semantic KPI Edition
+# Safe GPT Execution + Figure Validation + No Emojis
+# Streamlit Cloud Compatible
 # ======================================================================
 
 import streamlit as st
@@ -10,68 +12,69 @@ from openai import OpenAI
 import json
 
 # ======================================================================
-# Streamlit Configuration
+# STREAMLIT CONFIG
 # ======================================================================
 st.set_page_config(
     page_title="DataPilot",
-    layout="wide"
+    layout="wide",
 )
 
 st.title("DataPilot")
 
 
 # ======================================================================
-# OpenAI Client
+# OPENAI CLIENT
 # ======================================================================
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 # ======================================================================
-# Semantic Mapping
+# 1. SEMANTIC MAP
 # ======================================================================
 SEMANTIC_MAP = {
-    "revenue": ["revenue", "sales", "gmv", "turnover", "amount", "income", "amt", "rev"],
-    "units_sold": ["units", "qty", "quantity", "sold", "units_sold"],
+    "revenue": ["revenue", "sales", "gmv", "amount", "amt", "rev", "turnover", "income"],
+    "units_sold": ["units", "units_sold", "qty", "quantity", "sold"],
     "daily_demand": ["demand", "daily_demand", "orders", "order_qty"],
-    "inventory_on_hand": ["inventory", "stock", "onhand", "available_qty"],
+    "inventory_on_hand": ["inventory", "inv_onhand", "stock", "onhand", "available_qty"],
     "stockout_flag": ["stockout", "out_of_stock", "oos"],
     "lead_time_days": ["leadtime", "lead_time"],
     "patients_in": ["admissions", "patients_in", "inflow"],
     "patients_out": ["patients_out", "discharges", "outflow"],
     "surgery_count": ["surgeries", "surgery"],
-    "spend": ["spend", "cost", "budget", "marketing_spend", "ad_spend"],
+    "spend": ["spend", "cost", "budget", "ad_spend", "marketing_spend"],
     "profit": ["profit", "net_profit"],
     "expenses": ["expense", "expenses", "costs"]
 }
 
 
 # ======================================================================
-# Semantic Column Renaming
+# 2. SEMANTIC COLUMN RENAMING
 # ======================================================================
 def semantic_match(col):
     col_l = col.lower()
     for key, synonyms in SEMANTIC_MAP.items():
-        if any(term in col_l for term in synonyms):
+        if any(s in col_l for s in synonyms):
             return key
     return None
 
 
 def harmonize_columns(df):
-    renamed = {}
+    df = df.copy()
+    rename_map = {}
     for col in df.columns:
-        match = semantic_match(col)
-        renamed[col] = match if match else col
-    return df.rename(columns=renamed)
+        meaning = semantic_match(col)
+        rename_map[col] = meaning if meaning else col
+    return df.rename(columns=rename_map)
 
 
 # ======================================================================
-# KPI Rules
+# 3. KPI RULE ENGINE
 # ======================================================================
 KPI_RULES = {
     "retail": {
         "keywords": ["revenue", "units_sold"],
         "kpis": {
-            "Total Revenue": lambda df: df["revenue"].sum(),
+            "Total Revenue Generated": lambda df: df["revenue"].sum(),
             "Average Revenue per Sale": lambda df: df["revenue"].mean(),
             "Highest Revenue Sale": lambda df: df["revenue"].max(),
             "Total Units Sold": lambda df: df["units_sold"].sum()
@@ -83,7 +86,7 @@ KPI_RULES = {
         "kpis": {
             "Total Marketing Spend": lambda df: df[[c for c in df.columns if "spend" in c]].sum().sum(),
             "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
-            "ROI Revenue to Spend": lambda df: (
+            "ROI (Revenue / Spend)": lambda df: (
                 df["revenue"].sum() / df[[c for c in df.columns if "spend" in c]].sum().sum()
                 if "revenue" in df else None
             )
@@ -95,7 +98,7 @@ KPI_RULES = {
         "kpis": {
             "Average Daily Demand": lambda df: df["daily_demand"].mean(),
             "Total Stockouts": lambda df: df["stockout_flag"].sum() if "stockout_flag" in df else None,
-            "Average Inventory On Hand": lambda df: df["inventory_on_hand"].mean()
+            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean()
         }
     },
 
@@ -111,7 +114,7 @@ KPI_RULES = {
 
 
 # ======================================================================
-# Dataset Type Detection
+# 4. DETECT KPI GROUP
 # ======================================================================
 def detect_kpi_group(df):
     cols = df.columns
@@ -126,25 +129,26 @@ def detect_kpi_group(df):
 
 
 # ======================================================================
-# Compute KPIs Based on Dataset Type
+# 5. COMPUTE SEMANTIC KPIs
 # ======================================================================
 def compute_semantic_kpis(df):
     group = detect_kpi_group(df)
 
     if group is None:
-        numeric = df.select_dtypes(include="number")
-        if numeric.empty:
+        num = df.select_dtypes(include="number")
+        if len(num.columns) == 0:
             return {}
-
-        c = numeric.columns[0]
+        c = num.columns[0]
         return {
-            f"Total {c.title()}": numeric[c].sum(),
-            f"Average {c.title()}": numeric[c].mean(),
-            f"Max {c.title()}": numeric[c].max()
+            f"Total {c.title()}": num[c].sum(),
+            f"Average {c.title()}": num[c].mean(),
+            f"Maximum {c.title()}": num[c].max()
         }
 
+    kpi_funcs = KPI_RULES[group]["kpis"]
     results = {}
-    for label, fn in KPI_RULES[group]["kpis"].items():
+
+    for label, fn in kpi_funcs.items():
         try:
             value = fn(df)
             if value is not None:
@@ -156,7 +160,7 @@ def compute_semantic_kpis(df):
 
 
 # ======================================================================
-# Cleaning Function
+# 6. AUTO CLEANING
 # ======================================================================
 def auto_clean_df(df):
     df = df.copy()
@@ -176,30 +180,33 @@ def auto_clean_df(df):
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
-        if any(term in col.lower() for term in ["date", "week", "day"]):
+        if any(k in col.lower() for k in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
     return df
 
 
 # ======================================================================
-# GPT Auto EDA
+# 7. GPT ANALYSIS (SAFE)
 # ======================================================================
 def ask_gpt_for_analysis(df):
-    sample = df.head(40).to_csv(index=False)
+    SAMPLE = df.head(40).to_csv(index=False)
 
     prompt = f"""
-You are a senior data analyst.
-Use only this dataset sample:
+You are a senior data analyst. Based only on the dataset sample below:
 
-{sample}
+{SAMPLE}
 
-Return a JSON object with:
-1. cleaning_code - defines clean_df(df). Do not read or write files.
-2. eda_code - defines make_figures(df). Must use Plotly and return a dict.
-3. insights - clear business insights.
+Return valid JSON with fields:
+1. cleaning_code — must define clean_df(df). Never read files. No pd.read_csv or write.
+2. eda_code — must define make_figures(df) and return a dict of Plotly figures only.
+   Rules:
+   - each dict value must be a plotly figure
+   - do not return numpy types, timestamps, or non-serializable objects
+   - no dataframes or lists inside the dict
+3. insights — business-friendly insights.
 
-Return JSON only.
+Return ONLY valid JSON.
 """
 
     res = client.chat.completions.create(
@@ -207,23 +214,24 @@ Return JSON only.
         messages=[{"role": "user", "content": prompt}]
     )
 
-    raw = res.choices[0].message.content.replace("```json", "").replace("```", "")
+    raw = res.choices[0].message.content
+    raw = raw.replace("```json", "").replace("```", "")
     return json.loads(raw)
 
 
 # ======================================================================
-# Execute GPT Code Safely
+# 8. EXECUTE GPT CODE SAFELY
 # ======================================================================
 def run_dynamic_code(df, code, func_name):
-    namespace = {}
-    exec(code, {"df": df, "px": px, "pd": pd, "np": np}, namespace)
-    return namespace[func_name](df)
+    local_vars = {}
+    exec(code, {"df": df, "px": px, "pd": pd, "np": np}, local_vars)
+    return local_vars[func_name](df)
 
 
 # ======================================================================
-# File Upload
+# 9. FILE UPLOAD
 # ======================================================================
-uploaded = st.sidebar.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 if not uploaded:
     st.stop()
 
@@ -231,39 +239,36 @@ df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_ex
 
 
 # ======================================================================
-# Clean and Align
+# 10. PREPROCESS + SEMANTIC ALIGNMENT
 # ======================================================================
 df_clean = auto_clean_df(df_raw)
 df_semantic = harmonize_columns(df_clean)
 
 
 # ======================================================================
-# KPI Display
+# 11. EXECUTIVE SUMMARY KPI DISPLAY
 # ======================================================================
 st.subheader("Executive Summary")
-
 kpis = compute_semantic_kpis(df_semantic)
 
-if len(kpis) == 0:
-    st.write("No meaningful KPIs detected for this dataset.")
-else:
-    cols = st.columns(len(kpis))
-    for (label, value), col in zip(kpis.items(), cols):
-        col.markdown(
+cols = st.columns(len(kpis) if len(kpis) > 0 else 1)
+for (label, value), col in zip(kpis.items(), cols):
+    with col:
+        st.markdown(
             f"""
-            <div style="padding:16px; border-radius:10px; background:#10141a; border:1px solid #2a2a2a;">
-                <div style="font-size:14px; color:#aaaaaa;">{label}</div>
+            <div style="padding:16px; border-radius:10px; background:#10141a; border:1px solid #1f2937;">
+                <div style="font-size:14px; color:#9ca3af;">{label}</div>
                 <div style="font-size:22px; font-weight:600; margin-top:6px; color:white;">
                     {value:,.2f}
                 </div>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
 
 # ======================================================================
-# Data Preview
+# 12. RAW + CLEANED PREVIEW
 # ======================================================================
 st.subheader("Raw Data")
 st.dataframe(df_raw.head(50), use_container_width=True)
@@ -273,13 +278,15 @@ st.dataframe(df_semantic.head(50), use_container_width=True)
 
 
 # ======================================================================
-# GPT Auto EDA Button
+# 13. GPT AUTO ANALYSIS
 # ======================================================================
-st.subheader("GPT Auto Analysis")
+st.subheader("GPT Auto EDA")
 
 if st.button("Run GPT Analysis"):
-    with st.spinner("Generating insights and charts..."):
+    with st.spinner("Processing..."):
         gpt = ask_gpt_for_analysis(df_semantic)
+
+    st.success("Completed")
 
     st.subheader("Insights")
     st.write(gpt["insights"])
@@ -287,32 +294,40 @@ if st.button("Run GPT Analysis"):
     df2 = run_dynamic_code(df_semantic, gpt["cleaning_code"], "clean_df")
     figures = run_dynamic_code(df2, gpt["eda_code"], "make_figures")
 
-    st.subheader("AI-Generated Charts")
-    for fig in figures.values():
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Charts")
+
+    for name, fig in figures.items():
+        try:
+            if hasattr(fig, "to_plotly_json"):
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"Skipping invalid figure: {name}")
+        except Exception as e:
+            st.warning(f"Error rendering figure {name}: {e}")
 
 
 # ======================================================================
-# Ask Data Questions
+# 14. ASK QUESTIONS ABOUT DATA
 # ======================================================================
 st.subheader("Ask Questions About This Dataset")
 
-question = st.text_area("Enter your question")
+q = st.text_area("Enter your question")
 
 if st.button("Ask"):
-    if question.strip() == "":
+    if q.strip() == "":
         st.warning("Please enter a question.")
     else:
-        with st.spinner("Processing..."):
+        with st.spinner("Thinking..."):
             sample = df_semantic.head(50).to_csv(index=False)
 
             prompt = f"""
+You are a business data analyst.
 Dataset sample:
 {sample}
 
-Question: {question}
+Question: {q}
 
-Answer clearly in simple business language.
+Answer clearly in plain business language.
 """
 
             resp = client.chat.completions.create(
