@@ -1,7 +1,7 @@
-# ============================================================
-# InsightHub 6.1 – Scientific Analyst Mode + SMB Friendly UI
-# Complete Streamlit Application (Plug-and-Play)
-# ============================================================
+# ======================================================================
+# InsightHub 6.1.2 – Semantic KPI Edition (No Emojis)
+# GPT Auto EDA + Semantic KPI Detection + Dataset Classification
+# ======================================================================
 
 import streamlit as st
 import pandas as pd
@@ -11,288 +11,307 @@ from openai import OpenAI
 import json
 import re
 
-# -----------------------------
-# Streamlit Page Config
-# -----------------------------
+# ==========================================
+# STREAMLIT CONFIG
+# ==========================================
 st.set_page_config(
-    page_title="InsightHub 6.1 – GPT Auto EDA",
-    page_icon="📊",
+    page_title="InsightHub 6.1.2 – Semantic Auto EDA",
+    page_icon="📊",  # System emoji is allowed because it's part of Streamlit icon metadata. Remove if needed.
     layout="wide",
 )
 
-st.title("📊 InsightHub 6.1 – GPT Auto EDA")
-st.caption("Upload your dataset → AI cleans it → AI builds charts → Ask questions in plain English.")
+st.title("InsightHub 6.1.2 – Semantic Auto EDA")
+st.caption("Upload dataset → Semantic cleaning → Business KPIs → GPT EDA → Chat with the data")
 
 
-# =============================================================
-# GPT CLIENT (requires OPENAI_API_KEY in Streamlit Secrets)
-# =============================================================
+# ==========================================
+# GPT CLIENT
+# ==========================================
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
-# =============================================================
-# UTILITY: Clean monetary & messy columns
-# =============================================================
+# ======================================================================
+# 1. SEMANTIC MAP (Synonym-based Understanding)
+# ======================================================================
+SEMANTIC_MAP = {
+    "revenue": ["revenue", "sales", "gmv", "amount", "amt", "rev", "turnover", "income"],
+    "units_sold": ["units", "units_sold", "qty", "quantity", "sold"],
+    "daily_demand": ["demand", "daily_demand", "orders", "order_qty"],
+    "inventory_on_hand": ["inventory", "inv_onhand", "stock", "onhand", "available_qty"],
+    "stockout_flag": ["stockout", "out_of_stock", "oos"],
+    "lead_time_days": ["leadtime", "lead_time"],
+    "patients_in": ["admissions", "patients_in", "inflow"],
+    "patients_out": ["patients_out", "discharges", "outflow"],
+    "surgery_count": ["surgeries", "surgery"],
+    "spend": ["spend", "cost", "budget", "ad_spend", "marketing_spend"],
+    "profit": ["profit", "net_profit"],
+    "expenses": ["expense", "expenses", "costs"]
+}
+
+
+# ======================================================================
+# 2. COLUMN SEMANTIC ALIGNMENT
+# ======================================================================
+def semantic_match(col):
+    col_l = col.lower()
+    for key, synonyms in SEMANTIC_MAP.items():
+        if any(s in col_l for s in synonyms):
+            return key
+    return None
+
+
+def harmonize_columns(df):
+    df = df.copy()
+    rename_map = {}
+    for col in df.columns:
+        meaning = semantic_match(col)
+        rename_map[col] = meaning if meaning else col
+    return df.rename(columns=rename_map)
+
+
+# ======================================================================
+# 3. KPI RULE ENGINE
+# ======================================================================
+KPI_RULES = {
+    "retail": {
+        "keywords": ["revenue", "units_sold"],
+        "kpis": {
+            "Total Revenue Generated": lambda df: df["revenue"].sum(),
+            "Average Revenue per Sale": lambda df: df["revenue"].mean(),
+            "Highest Revenue Sale": lambda df: df["revenue"].max(),
+            "Total Units Sold": lambda df: df["units_sold"].sum()
+        }
+    },
+
+    "marketing": {
+        "keywords": ["spend"],
+        "kpis": {
+            "Total Marketing Spend": lambda df: df[[c for c in df.columns if "spend" in c]].sum().sum(),
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
+            "ROI (Revenue / Spend)": lambda df: (
+                df["revenue"].sum() / df[[c for c in df.columns if "spend" in c]].sum().sum()
+                if "revenue" in df else None
+            )
+        }
+    },
+
+    "inventory": {
+        "keywords": ["inventory_on_hand", "daily_demand"],
+        "kpis": {
+            "Average Daily Demand": lambda df: df["daily_demand"].mean(),
+            "Total Stockouts": lambda df: df["stockout_flag"].sum() if "stockout_flag" in df else None,
+            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean()
+        }
+    },
+
+    "finance": {
+        "keywords": ["profit", "expenses"],
+        "kpis": {
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
+            "Total Expenses": lambda df: df["expenses"].sum(),
+            "Net Profit": lambda df: df["profit"].sum() if "profit" in df else None
+        }
+    }
+}
+
+
+# ======================================================================
+# 4. Detect Dataset Type (Auto)
+# ======================================================================
+def detect_kpi_group(df):
+    cols = df.columns
+    scores = {}
+
+    for group, rule in KPI_RULES.items():
+        score = sum(1 for kw in rule["keywords"] if kw in cols)
+        scores[group] = score
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else None
+
+
+# ======================================================================
+# 5. Compute KPIs (Semantic + Rule Engine)
+# ======================================================================
+def compute_semantic_kpis(df):
+    group = detect_kpi_group(df)
+
+    if group is None:
+        num = df.select_dtypes(include="number")
+        if len(num.columns) == 0:
+            return {}
+        c = num.columns[0]
+        return {
+            f"Total {c.title()}": num[c].sum(),
+            f"Average {c.title()}": num[c].mean(),
+            f"Maximum {c.title()}": num[c].max()
+        }
+
+    kpi_funcs = KPI_RULES[group]["kpis"]
+    results = {}
+
+    for label, fn in kpi_funcs.items():
+        try:
+            value = fn(df)
+            if value is not None:
+                results[label] = value
+        except:
+            pass
+
+    return results
+
+
+# ======================================================================
+# 6. Auto Clean (currency, dates, unnamed)
+# ======================================================================
 def auto_clean_df(df):
     df = df.copy()
 
-    # Remove unnamed columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
-    # Clean currency-like columns
     for col in df.columns:
         if df[col].dtype == "object":
             cleaned = (
                 df[col]
                 .astype(str)
-                .str.replace(",", "", regex=False)
-                .str.replace("$", "", regex=False)
-                .str.replace("₹", "", regex=False)
-                .str.replace("Rs", "", regex=False)
+                .str.replace(",", "")
+                .str.replace("$", "")
+                .str.replace("₹", "")
+                .str.replace("Rs", "")
                 .str.strip()
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
-    # Fix date columns
-    for col in df.columns:
         if any(k in col.lower() for k in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
     return df
 
 
-# =============================================================
-# DETECT DATASET TYPE
-# =============================================================
-def infer_dataset_type(df):
-    cols = " ".join(df.columns).lower()
-
-    if any(k in cols for k in ["spend", "cpc", "ctr", "campaign", "impressions"]):
-        return "marketing"
-
-    if any(k in cols for k in ["unit", "sales", "quantity", "sku", "item"]):
-        return "sales"
-
-    if any(k in cols for k in ["stock", "inventory", "reorder", "demand"]):
-        return "inventory"
-
-    if any(k in cols for k in ["profit", "margin", "expense", "cost"]):
-        return "finance"
-
-    return "general"
-
-
-# =============================================================
-# EXECUTIVE OVERVIEW: DATASET-AWARE CARDS
-# =============================================================
-def make_overview_cards(df):
-    ds = infer_dataset_type(df)
-    cards = {}
-
-    # ---------- MARKETING DATA ----------
-    if ds == "marketing":
-        spend_cols = [c for c in df.columns if "spend" in c.lower()]
-
-        if "revenue" in df.columns:
-            cards["Total Revenue"] = f"₹{df['revenue'].sum():,.0f}"
-
-        if spend_cols and "revenue" in df.columns:
-            roi_strength = {c: df["revenue"].corr(df[c]) for c in spend_cols if df[c].dtype != "O"}
-            best_roi = max(roi_strength, key=roi_strength.get)
-            cards["Best ROI Channel"] = best_roi.replace("_", " ").title()
-
-        if spend_cols:
-            top_spend = max(spend_cols, key=lambda c: df[c].sum())
-            cards["Highest Spend Channel"] = top_spend.replace("_", " ").title()
-
-    # ---------- SALES DATA ----------
-    elif ds == "sales":
-        if "units" in df.columns:
-            cards["Total Units Sold"] = f"{df['units'].sum():,.0f}"
-
-        if "revenue" in df.columns:
-            cards["Total Revenue"] = f"₹{df['revenue'].sum():,.0f}"
-
-        if "product" in df.columns and "revenue" in df.columns:
-            top_prod = df.loc[df["revenue"].idxmax(), "product"]
-            cards["Top Revenue Product"] = top_prod
-
-    # ---------- INVENTORY ----------
-    elif ds == "inventory":
-        if "stock" in df.columns:
-            cards["Total Stock"] = df["stock"].sum()
-            cards["Average Stock per Item"] = round(df["stock"].mean(), 2)
-
-    # ---------- FINANCE ----------
-    elif ds == "finance":
-        if "revenue" in df.columns and "expenses" in df.columns:
-            profit = df["revenue"].sum() - df["expenses"].sum()
-            margin = (profit / df["revenue"].sum()) * 100
-            cards["Net Profit"] = f"₹{profit:,.0f}"
-            cards["Profit Margin"] = f"{margin:.1f}%"
-
-    # ---------- GENERAL ----------
-    else:
-        num = df.select_dtypes(include="number")
-        if len(num.columns) >= 2:
-            corr = num.corr().abs()
-            strongest = (
-                corr.where(~np.eye(corr.shape[0], dtype=bool))
-                .stack()
-                .idxmax()
-            )
-            cards["Strongest Relationship"] = f"{strongest[0]} ↔ {strongest[1]}"
-
-        var_col = num.std().idxmax()
-        cards["Most Changing Column"] = var_col.title()
-
-    return cards
-
-
-# =============================================================
-# GPT CALL FOR AUTO EDA
-# =============================================================
+# ======================================================================
+# 7. GPT Auto EDA
+# ======================================================================
 def ask_gpt_for_analysis(df):
     SAMPLE = df.head(40).to_csv(index=False)
 
     prompt = f"""
-You are a data analyst assistant. Based on this sample dataset:
+You are a senior data analyst. Based on this dataset sample:
 
 {SAMPLE}
 
-1. Write Python code to clean the data safely.
-2. Write Python code to generate 3-5 meaningful charts using plotly.
-3. Write easy-to-understand insights for small business owners. No jargon.
-4. Return output strictly in JSON with keys:
-   - cleaning_code
-   - eda_code
-   - insights
-    """
+Write JSON with:
+1. cleaning_code - safe pandas cleaning code
+2. eda_code - 3 to 5 plotly charts
+3. insights - simple English insights for business owners
+
+Return only valid JSON.
+"""
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
+        messages=[{"role": "user", "content": prompt}]
     )
 
-    raw_text = res.choices[0].message.content
-
-    # Remove accidental markdown fences
-    cleaned = raw_text.replace("```json", "").replace("```", "")
-
-    try:
-        return json.loads(cleaned)
-    except:
-        raise ValueError("GPT returned invalid JSON:\n\n" + raw_text)
+    raw = res.choices[0].message.content
+    raw = raw.replace("```json", "").replace("```", "")
+    return json.loads(raw)
 
 
-# =============================================================
-# EXECUTE GPT-GENERATED CODE SAFELY
-# =============================================================
+# ======================================================================
+# 8. Execute GPT Code Safely
+# ======================================================================
 def run_dynamic_code(df, code, func_name):
     local_vars = {}
     exec(code, {"df": df, "px": px, "pd": pd, "np": np}, local_vars)
     return local_vars[func_name](df)
 
 
-# ================================
-# SIDEBAR: File Upload
-# ================================
-uploaded_file = st.sidebar.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
-
-if uploaded_file is None:
-    st.info("👆 Upload a dataset to begin.")
+# ======================================================================
+# 9. Sidebar Upload
+# ======================================================================
+uploaded = st.sidebar.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
+if not uploaded:
     st.stop()
 
+df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
 
-# ================================
-# LOAD + CLEAN
-# ================================
-if uploaded_file.name.endswith(".csv"):
-    df_raw = pd.read_csv(uploaded_file)
-else:
-    df_raw = pd.read_excel(uploaded_file)
 
+# ======================================================================
+# 10. Preprocess + Semantic Cleaning
+# ======================================================================
 df_clean = auto_clean_df(df_raw)
+df_semantic = harmonize_columns(df_clean)
 
 
-# =============================================================
-# SECTION: OVERVIEW (Dynamic Executive Cards)
-# =============================================================
-st.subheader("📌 Overview")
+# ======================================================================
+# 11. Executive Summary (Semantic KPIs)
+# ======================================================================
+st.subheader("Executive Summary")
+kpis = compute_semantic_kpis(df_semantic)
 
-cards = make_overview_cards(df_clean)
-cols = st.columns(len(cards))
-
-for (label, value), col in zip(cards.items(), cols):
+cols = st.columns(len(kpis))
+for (label, value), col in zip(kpis.items(), cols):
     with col:
         st.markdown(
             f"""
-            <div style="padding:18px; border-radius:12px; background:#10141a; border:1px solid #1f2937;">
+            <div style="padding:16px; border-radius:10px; background:#10141a; border:1px solid #1f2937;">
                 <div style="font-size:14px; color:#9ca3af;">{label}</div>
-                <div style="font-size:22px; font-weight:600; margin-top:6px; color:white;">{value}</div>
+                <div style="font-size:22px; font-weight:600; margin-top:6px; color:white;">
+                    {value:,.2f}
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
 
-# =============================================================
-# RAW + CLEANED PREVIEW
-# =============================================================
-st.subheader("📄 Raw Data")
+# ======================================================================
+# 12. Raw + Cleaned Preview
+# ======================================================================
+st.subheader("Raw Data")
 st.dataframe(df_raw.head(50), use_container_width=True)
 
-st.subheader("🧹 Cleaned Data")
-st.dataframe(df_clean.head(50), use_container_width=True)
+st.subheader("Cleaned and Semantic-Aligned Data")
+st.dataframe(df_semantic.head(50), use_container_width=True)
 
 
-# =============================================================
-# GPT AUTO EDA
-# =============================================================
-st.subheader("🤖 GPT Auto Analysis")
+# ======================================================================
+# 13. GPT Auto Analysis
+# ======================================================================
+st.subheader("GPT Auto EDA")
 
 if st.button("Run GPT Analysis"):
-    with st.spinner("Running GPT…"):
-        gpt = ask_gpt_for_analysis(df_clean)
+    with st.spinner("Processing..."):
+        gpt = ask_gpt_for_analysis(df_semantic)
 
-    st.success("AI analysis complete.")
+    st.success("Completed.")
 
-    # Insights
-    st.subheader("📘 Insights (Plain English)")
+    st.subheader("Insights")
     st.write(gpt["insights"])
 
-    # Execute Cleaning & EDA Code
-    try:
-        df2 = run_dynamic_code(df_clean, gpt["cleaning_code"], "clean_df")
-    except:
-        df2 = df_clean
+    df2 = run_dynamic_code(df_semantic, gpt["cleaning_code"], "clean_df")
+    figs = run_dynamic_code(df2, gpt["eda_code"], "make_figures")
 
-    try:
-        figures = run_dynamic_code(df2, gpt["eda_code"], "make_figures")
-
-        st.subheader("📊 Charts")
-        for f in figures.values():
-            st.plotly_chart(f, use_container_width=True)
-    except Exception as e:
-        st.error("Chart code failed.")
-        st.code(str(e))
+    st.subheader("Charts")
+    for fig in figs.values():
+        st.plotly_chart(fig, use_container_width=True)
 
 
-# =============================================================
-# ASK QUESTIONS ABOUT DATA
-# =============================================================
-st.subheader("💬 Ask Questions About This Data")
-question = st.text_area("Example: 'Which channel is most efficient?' or 'Why did sales drop in March?'")
+# ======================================================================
+# 14. Ask Questions About the Data
+# ======================================================================
+st.subheader("Ask Questions About This Dataset")
 
-if st.button("Ask AI"):
-    if question.strip() == "":
+q = st.text_area("Enter your question")
+
+if st.button("Ask"):
+    if q.strip() == "":
         st.warning("Please enter a question.")
     else:
-        with st.spinner("AI thinking..."):
-            prompt = f"Dataset:\n{df_clean.head(40).to_markdown()}\n\nQuestion: {question}\nExplain answer in simple English."
-            res = client.chat.completions.create(
+        with st.spinner("Thinking..."):
+            prompt = f"Dataset:\n{df_semantic.head(50).to_markdown()}\n\nQuestion: {q}\nExplain the answer in simple business language."
+            resp = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": prompt}]
             )
-        st.write(res.choices[0].message.content)
+        st.write(resp.choices[0].message.content)
