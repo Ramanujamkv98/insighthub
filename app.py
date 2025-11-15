@@ -15,12 +15,12 @@ import re
 # STREAMLIT CONFIG
 # ======================================================================
 st.set_page_config(
-    page_title="InsightHub 6.1.3 – Semantic Auto EDA",
+    page_title="DataPilot",
     layout="wide",
 )
 
-st.title("InsightHub 6.1.3 – Semantic Auto EDA")
-st.caption("Upload dataset → Semantic cleaning → Business KPIs → GPT EDA → Ask questions")
+st.title("D")
+
 
 
 # ======================================================================
