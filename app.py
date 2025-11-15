@@ -1,8 +1,7 @@
-# InsightHub 5.0 – Scientific Analyst Mode
-# Universal cleaning + EDA + Linear Regression (simple & multiple) + GPT insights
+# InsightHub 6.0 – Scientific Analyst Mode (SMB Edition)
 
 import json
-from io import StringIO
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
@@ -13,16 +12,19 @@ import statsmodels.api as sm
 import streamlit as st
 from openai import OpenAI
 
-# ------------------ Page config & styling ------------------ #
+# ---------------------------------------------------
+# Streamlit page configuration and global Plotly theme
+# ---------------------------------------------------
 
 st.set_page_config(
-    page_title="InsightHub 5.0 – Scientific Analyst Mode",
+    page_title="InsightHub 6.0 – Scientific Analyst Mode",
     page_icon=None,
     layout="wide",
 )
 
 pio.templates.default = "plotly_dark"
 
+# Basic SaaS-style dark theme
 st.markdown(
     """
 <style>
@@ -33,10 +35,10 @@ body {
     padding-top: 1rem;
 }
 .card {
-    background: #0B1120;
+    background: #020617;
     padding: 1rem 1.25rem;
     border-radius: 16px;
-    border: 1px solid #1F2937;
+    border: 1px solid #1f2933;
     margin-bottom: 1rem;
 }
 .metric-card {
@@ -64,33 +66,38 @@ body {
     unsafe_allow_html=True,
 )
 
-st.title("InsightHub 5.0 – Scientific Analyst Mode")
-st.caption("Built for Indian SMBs: clean your data, run regressions, and get interpretable insights.")
+st.title("InsightHub 6.0 – Scientific Analyst Mode")
+st.caption("Built for Indian small and medium businesses – clean your data, understand drivers, and act on plain-English insights.")
 
-# ------------------ OpenAI client ------------------ #
+# ---------------------------------------------------
+# OpenAI client
+# ---------------------------------------------------
 
 api_key = st.secrets.get("OPENAI_API_KEY")
 if not api_key:
-    st.error("Please add OPENAI_API_KEY in your Streamlit secrets.")
+    st.error("Please add OPENAI_API_KEY in your Streamlit secrets to use the AI features.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
-
-# ------------------ Universal Cleaning Engine ------------------ #
+# ---------------------------------------------------
+# Cleaning utilities
+# ---------------------------------------------------
 
 def auto_clean_df(df: pd.DataFrame):
     """
     Universal cleaning for messy business data.
+
     Handles:
-      - Unnamed columns
-      - All-null rows
-      - Currency symbols (₹, $, commas, %)
-      - Accounting negatives: (500) -> -500
-      - Object columns that are numeric-like or datetime-like
-      - Inf / -Inf
+    - Unnamed columns
+    - All-null rows
+    - Currency symbols (₹, $, commas, %)
+    - Accounting negatives: (500) -> -500
+    - Object columns that are numeric-like or datetime-like
+    - Inf / -Inf
+
     Returns:
-      cleaned_df, cleaning_info (dict)
+        cleaned_df, cleaning_info (dict)
     """
     df = df.copy()
     info = {
@@ -123,23 +130,24 @@ def auto_clean_df(df: pd.DataFrame):
     for col in obj_cols:
         s = df[col].astype(str).str.strip()
 
-        # 1) Try datetime
+        # Try datetime
         dt = pd.to_datetime(s, errors="coerce", dayfirst=True, infer_datetime_format=True)
         if dt.notna().mean() >= 0.7:
             df[col] = dt
             info["datetime_converted"].append(col)
             continue
 
-        # 2) Try numeric-like
+        # Try numeric-like cleaning
         cleaned = (
             s.str.replace(r"\((.*)\)", r"-\1", regex=True)  # accounting negatives
              .str.replace("[₹$,]", "", regex=True)         # currency symbols and commas
-             .str.replace("%", "", regex=False)            # percentages
+             .str.replace("%", "", regex=False)            # percentage sign
              .str.replace(r"\s+", "", regex=True)          # extra spaces
         )
         cleaned = cleaned.replace("", np.nan)
         num = pd.to_numeric(cleaned, errors="coerce")
 
+        # If at least half the column can be numeric, keep it
         if num.notna().mean() >= 0.5:
             df[col] = num
             info["numeric_converted"].append(col)
@@ -175,8 +183,9 @@ def detect_target_column(df: pd.DataFrame):
     # fallback: numeric column with largest variance
     return df[numeric_cols].var().sort_values(ascending=False).index[0]
 
-
-# ------------------ Modelling and EDA helpers ------------------ #
+# ---------------------------------------------------
+# KPI helpers
+# ---------------------------------------------------
 
 def compute_kpis(df: pd.DataFrame):
     target = detect_target_column(df)
@@ -196,12 +205,12 @@ def compute_kpis(df: pd.DataFrame):
 
 def render_kpi_cards(kpis: dict):
     if not kpis:
-        st.write("No numeric target detected for KPIs.")
+        st.write("No clear numeric target metric detected yet. Try a dataset with revenue or sales.")
         return
 
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(
-        f'<div class="metric-card"><div class="metric-label">Target metric</div>'
+        f'<div class="metric-card"><div class="metric-label">Main metric</div>'
         f'<div class="metric-value">{kpis["target_col"]}</div></div>',
         unsafe_allow_html=True,
     )
@@ -211,15 +220,31 @@ def render_kpi_cards(kpis: dict):
         unsafe_allow_html=True,
     )
     c3.markdown(
-        f'<div class="metric-card"><div class="metric-label">Average</div>'
+        f'<div class="metric-card"><div class="metric-label">Average per row</div>'
         f'<div class="metric-value">{kpis["mean"]:,.2f}</div></div>',
         unsafe_allow_html=True,
     )
     c4.markdown(
-        f'<div class="metric-card"><div class="metric-label">Maximum</div>'
+        f'<div class="metric-card"><div class="metric-label">Highest value</div>'
         f'<div class="metric-value">{kpis["max"]:,.2f}</div></div>',
         unsafe_allow_html=True,
     )
+
+# ---------------------------------------------------
+# Chart helpers – SaaS theme
+# ---------------------------------------------------
+
+def apply_theme(fig):
+    fig.update_layout(
+        plot_bgcolor="#020617",
+        paper_bgcolor="#020617",
+        font=dict(color="white", size=14),
+        title=dict(font=dict(size=20)),
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=False)
+    return fig
 
 
 def make_missing_bar(df: pd.DataFrame):
@@ -235,99 +260,149 @@ def make_missing_bar(df: pd.DataFrame):
         y="missing",
         title="Missing values per column",
         text="missing",
+        color_discrete_sequence=["#6366F1"],
     )
-    fig.update_layout(xaxis_tickangle=-45)
-    return fig
+    fig.update_layout(xaxis_tickangle=-45, bargap=0.25)
+    return apply_theme(fig)
 
 
-def make_corr_matrix(df: pd.DataFrame):
-    num_df = df.select_dtypes(include=[np.number])
-    if num_df.shape[1] < 2:
-        return None, None
-    corr = num_df.corr().round(3)
+def make_trend(df: pd.DataFrame, date_col: str, value_col: str):
+    tmp = df[[date_col, value_col]].dropna().sort_values(date_col)
+    if tmp.empty:
+        return None
+    fig = px.line(
+        tmp,
+        x=date_col,
+        y=value_col,
+        markers=True,
+        title=f"{value_col.replace('_',' ').title()} over time",
+        color_discrete_sequence=["#4F46E5"],
+    )
+    fig.update_traces(line_width=2)
+    return apply_theme(fig)
+
+
+def make_hist(df: pd.DataFrame, col: str):
+    tmp = df[col].dropna()
+    if tmp.empty:
+        return None
+    fig = px.histogram(
+        df,
+        x=col,
+        nbins=20,
+        opacity=0.85,
+        title=f"How {col.replace('_',' ').title()} is spread",
+        color_discrete_sequence=["#6366F1"],
+    )
+    fig.update_layout(bargap=0.15, xaxis_title=col.replace("_", " ").title(), yaxis_title="Number of rows")
+    return apply_theme(fig)
+
+
+def make_heatmap(df: pd.DataFrame):
+    numeric_df = df.select_dtypes(include=[np.number])
+    if numeric_df.shape[1] < 2:
+        return None
+    corr = numeric_df.corr().round(2)
     fig = px.imshow(
         corr,
         text_auto=True,
         aspect="auto",
-        title="Correlation heatmap (numeric columns)",
+        title="Numbers that move together",
         color_continuous_scale="RdBu",
         zmin=-1,
         zmax=1,
     )
-    return corr, fig
+    return apply_theme(fig)
 
 
-def make_time_series(df: pd.DataFrame):
-    date_col = detect_date_column(df)
-    target = detect_target_column(df)
-    if not date_col or not target:
-        return None
-    if not np.issubdtype(df[target].dtype, np.number):
-        return None
-    tmp = df[[date_col, target]].dropna()
+def make_category_chart(df: pd.DataFrame, col: str, target: str | None = None):
+    if target and target in df.columns and np.issubdtype(df[target].dtype, np.number):
+        tmp = df.groupby(col)[target].mean().reset_index()
+        tmp = tmp.sort_values(by=target, ascending=False).head(20)
+        fig = px.bar(
+            tmp,
+            x=col,
+            y=target,
+            title=f"Average {target.replace('_',' ').title()} by {col}",
+            text_auto=".2f",
+            color_discrete_sequence=["#22C55E"],
+        )
+    else:
+        vc = df[col].value_counts().head(20).reset_index()
+        vc.columns = [col, "count"]
+        fig = px.bar(
+            vc,
+            x=col,
+            y="count",
+            title=f"Most common {col.replace('_',' ').title()}",
+            text_auto=True,
+            color_discrete_sequence=["#22C55E"],
+        )
+
+    fig.update_layout(xaxis_tickangle=-45)
+    return apply_theme(fig)
+
+
+def make_scatter(df: pd.DataFrame, x: str, y: str):
+    tmp = df[[x, y]].dropna()
     if tmp.empty:
         return None
-    tmp = tmp.sort_values(by=date_col)
-    fig = px.line(
+    fig = px.scatter(
         tmp,
-        x=date_col,
-        y=target,
-        title=f"{target} over time ({date_col})",
+        x=x,
+        y=y,
+        opacity=0.8,
+        title=f"{y.replace('_',' ').title()} vs {x.replace('_',' ').title()}",
+        color_discrete_sequence=["#10B981"],
     )
-    return fig
+    return apply_theme(fig)
 
 
-def make_target_distribution(df: pd.DataFrame):
+def auto_charts(df: pd.DataFrame):
+    """Pick a reasonable set of charts for the EDA tab."""
+    figs = {}
+    numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+    categorical = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    date_col = detect_date_column(df)
     target = detect_target_column(df)
-    if not target:
-        return None
-    if not np.issubdtype(df[target].dtype, np.number):
-        return None
-    fig = px.histogram(
-        df,
-        x=target,
-        nbins=30,
-        title=f"Distribution of {target}",
-    )
-    return fig
 
+    # Trend chart
+    if date_col and target:
+        trend_fig = make_trend(df, date_col, target)
+        if trend_fig is not None:
+            figs["trend"] = trend_fig
 
-def make_category_breakdown(df: pd.DataFrame):
-    target = detect_target_column(df)
-    if not target:
-        return None
-    if not np.issubdtype(df[target].dtype, np.number):
-        return None
+    # Histograms for up to 2 numeric columns
+    for col in numeric[:2]:
+        h = make_hist(df, col)
+        if h is not None:
+            figs[f"hist_{col}"] = h
 
-    cat_candidates = []
-    for col in df.columns:
-        if col == target:
-            continue
-        if df[col].dtype == "object" or str(df[col].dtype).startswith("category"):
-            nunique = df[col].nunique(dropna=True)
-            if 2 <= nunique <= 20:
-                cat_candidates.append((col, nunique))
+    # Category chart
+    if categorical:
+        cat_fig = make_category_chart(df, categorical[0], target)
+        if cat_fig is not None:
+            figs["category"] = cat_fig
 
-    if not cat_candidates:
-        return None
+    # Scatter of first numeric vs target
+    if target and target in numeric:
+        for col in numeric:
+            if col != target:
+                sc = make_scatter(df, col, target)
+                if sc is not None:
+                    figs[f"scatter_{col}"] = sc
+                break
 
-    cat_candidates = sorted(cat_candidates, key=lambda x: x[1])
-    cat_col = cat_candidates[0][0]
+    # Heatmap
+    heat = make_heatmap(df)
+    if heat is not None:
+        figs["heatmap"] = heat
 
-    tmp = df.groupby(cat_col)[target].mean().reset_index()
-    tmp = tmp.sort_values(by=target, ascending=False)
-    fig = px.bar(
-        tmp,
-        x=cat_col,
-        y=target,
-        title=f"Average {target} by {cat_col}",
-        text_auto=".2f",
-    )
-    fig.update_layout(xaxis_tickangle=-45)
-    return fig
+    return figs
 
-
-# ------------------ Regression: simple & multiple ------------------ #
+# ---------------------------------------------------
+# Regression: simple & multiple
+# ---------------------------------------------------
 
 def compute_simple_linear_regressions(df: pd.DataFrame):
     """
@@ -348,7 +423,7 @@ def compute_simple_linear_regressions(df: pd.DataFrame):
         if feature == target:
             continue
         sub = df[[feature, target]].dropna()
-        if sub.shape[0] < 10:
+        if sub.shape[0] < 20:
             continue
 
         X = sm.add_constant(sub[feature])
@@ -399,10 +474,9 @@ def compute_multiple_regression(df: pd.DataFrame):
         return None, None
 
     X = num_df.drop(columns=[target]).dropna()
-    if X.shape[0] < 20:
+    if X.shape[0] < 40:
         return None, None
 
-    # Align y with X indexes
     y = df[target].loc[X.index]
     X_const = sm.add_constant(X)
     try:
@@ -424,8 +498,9 @@ def compute_multiple_regression(df: pd.DataFrame):
     summary_text = model.summary().as_text()
     return coef_df, summary_text
 
-
-# ------------------ GPT: insights and Q&A (scientific-aware) ------------------ #
+# ---------------------------------------------------
+# GPT helpers – SMB-friendly prompts
+# ---------------------------------------------------
 
 def build_profile_for_gpt(df_clean, cleaning_info, simple_reg_df, multi_coef_df):
     sample = df_clean.head(200)
@@ -450,28 +525,34 @@ def call_gpt_insights(df_clean, cleaning_info, simple_reg_df, multi_coef_df) -> 
     profile_json = build_profile_for_gpt(df_clean, cleaning_info, simple_reg_df, multi_coef_df)
 
     system_msg = """
-You are a senior analytics consultant working with small and medium businesses in India.
+You are InsightHub, a simple English business advisor for small shops and small businesses in India.
 
-You will receive a JSON summary of a cleaned dataset plus results from:
-- simple linear regressions (target vs each predictor)
-- multiple linear regression
+You will receive:
+- A summary of the dataset
+- Some basic model results about what relates to the main metric (for example, revenue or total sales).
 
-Your task is to write a concise yet rigorous narrative:
-- 5 to 10 bullet points of key insights.
-- Focus on which variables are most strongly associated with the target metric.
-- Distinguish strong relationships (high |slope|, high R², low p-value) from weak ones.
-- Highlight any potential multicollinearity or caution where interpretation is limited.
-- Avoid claiming causality; speak in terms of association and practical business guidance.
+Your job is to explain the patterns in very simple language.
 
-Then add a short section:
-- "Recommended next analyses" – 3 to 5 bullet points of what the SMB should do next
-  (e.g., experiment with budget shifts, segment analysis, seasonality checks, etc.).
+Important:
+- Do NOT use words like "p-value", "R-squared", "regression", "multicollinearity", "coefficient", "statistical significance".
+- Avoid any heavy academic or technical terminology.
+- Use examples and explanations a shopkeeper or small business owner can understand.
+- Focus on:
+  * Which numbers seem to move together with the main metric
+  * Which products, channels or columns look important
+  * Any clear up or down trends over time
+  * Fast-moving vs slow-moving items
+  * High-value vs low-value items
 
-Use a professional tone. Do not output any Python code.
+Structure your answer as:
+
+1. Key findings (5–8 short bullet points)
+2. What this means for your business (3–5 bullet points)
+3. What you should do next (3–6 very concrete action points)
 """
 
     user_msg = f"""
-Here is the dataset and modelling summary:
+Here is the dataset and modelling summary as JSON:
 
 {profile_json}
 """
@@ -482,7 +563,7 @@ Here is the dataset and modelling summary:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.25,
+        temperature=0.3,
     )
     return resp.choices[0].message.content.strip()
 
@@ -497,28 +578,38 @@ def call_gpt_qa(df_clean, insights_md, simple_reg_df, multi_coef_df, question: s
     )
 
     system_msg = """
-You are a data analyst answering questions for an Indian SMB.
-Use the sample data and regression outputs to ground your answer.
-Be explicit when you rely on the regression evidence.
-Avoid overclaiming causality; talk in terms of association and likely impact.
+You are an analytics assistant helping a small business owner in India.
+Use simple, everyday language.
 
-Answer in clear Markdown. Do not output Python code.
+You have:
+- A sample of the cleaned data
+- Some model outputs about which columns relate to the main metric
+- A previous high-level explanation of the data
+
+When you answer:
+
+- Always ground your answer in the data and model information you were given.
+- Do NOT use words like "p-value", "R-squared", "regression", "multicollinearity".
+- Instead, say things like "looks strongly connected", "weak relationship", "goes up when this goes up".
+- If there is not enough information, clearly say so.
+
+End your answer with a short section called "Practical next steps" with 2–4 bullets.
 """
 
     user_msg = f"""
 CLEANED DATA SAMPLE (CSV):
 {sample_csv}
 
-PRIOR INSIGHTS (Markdown):
+PREVIOUS INSIGHTS (Markdown):
 {insights_md}
 
-SIMPLE LINEAR REGRESSIONS (top features):
+SIMPLE LINE RELATIONSHIPS (top features):
 {json.dumps(simple_json, indent=2)}
 
-MULTIPLE REGRESSION COEFFICIENTS:
+MULTI-FACTOR MODEL SUMMARY:
 {json.dumps(multi_json, indent=2)}
 
-QUESTION:
+QUESTION FROM THE USER:
 {question}
 """
 
@@ -528,18 +619,61 @@ QUESTION:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.3,
+        temperature=0.35,
     )
     return resp.choices[0].message.content.strip()
 
+# ---------------------------------------------------
+# Dynamic example questions
+# ---------------------------------------------------
 
-# ------------------ Sidebar: upload ------------------ #
+def generate_dynamic_examples(df_clean: pd.DataFrame):
+    examples = []
+    cols = df_clean.columns.tolist()
+    num_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+    date_col = detect_date_column(df_clean)
+    target = detect_target_column(df_clean)
+
+    # Main metric questions
+    if target:
+        examples.append(f"What are the main things that seem to affect {target}?")
+        examples.append(f"Which items or columns are most linked to higher {target}?")
+
+    # Time-based questions
+    if date_col and target:
+        examples.append(f"Do you see any monthly or seasonal ups and downs in {target}?")
+        examples.append(f"Is {target} generally going up or down over time?")
+
+    # Spend / marketing type questions
+    spend_like = [c for c in cols if "spend" in c.lower() or "budget" in c.lower()]
+    if spend_like and target:
+        examples.append("Which spend channel seems to give better returns?")
+        examples.append("If I increase one type of spend, which one is likely to help the most?")
+
+    # Categorical questions
+    cat_cols = df_clean.select_dtypes(include=["object", "category"]).columns.tolist()
+    if cat_cols and target:
+        cat = cat_cols[0]
+        examples.append(f"Which {cat} groups are doing better on {target}?")
+        examples.append(f"Are there any {cat} groups that look weak and need attention?")
+
+    # General questions
+    examples.append("Which items look like fast movers and which are slow?")
+    examples.append("Are there any weeks or months where performance suddenly changed?")
+
+    # Remove duplicates and keep first 6–7
+    examples = list(dict.fromkeys(examples))
+    return examples[:7]
+
+# ---------------------------------------------------
+# Streamlit sidebar – upload
+# ---------------------------------------------------
 
 st.sidebar.header("Upload data")
-uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
 if not uploaded:
-    st.info("Upload a CSV or Excel file to get started.")
+    st.info("Upload a CSV or Excel file to start the analysis.")
     st.stop()
 
 if uploaded.name.lower().endswith(".csv"):
@@ -547,15 +681,18 @@ if uploaded.name.lower().endswith(".csv"):
 else:
     df_raw = pd.read_excel(uploaded)
 
-# ------------------ Raw preview ------------------ #
+# ---------------------------------------------------
+# Raw data preview
+# ---------------------------------------------------
 
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Raw data preview</div>', unsafe_allow_html=True)
 st.dataframe(df_raw.head(200), use_container_width=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
-
-# ------------------ Pipeline (cached) ------------------ #
+# ---------------------------------------------------
+# Cached pipeline
+# ---------------------------------------------------
 
 @st.cache_data(show_spinner=False)
 def run_pipeline(data: pd.DataFrame):
@@ -565,156 +702,149 @@ def run_pipeline(data: pd.DataFrame):
     insights_md = call_gpt_insights(cleaned, info, simple_reg, multi_coef)
     return cleaned, info, simple_reg, multi_coef, multi_summary, insights_md
 
-
-with st.spinner("Cleaning data and running models..."):
+with st.spinner("Cleaning data and running analysis..."):
     df_clean, clean_info, simple_reg_df, multi_coef_df, multi_summary_text, gpt_insights = run_pipeline(
         df_raw
     )
 
-# ------------------ Tabs ------------------ #
+# ---------------------------------------------------
+# Tabs
+# ---------------------------------------------------
 
-tab_overview, tab_data_quality, tab_eda, tab_models, tab_insights, tab_ask = st.tabs(
-    [
-        "Overview",
-        "Data quality",
-        "Visual EDA",
-        "Modelling (regressions)",
-        "GPT interpretation",
-        "Ask the data",
-    ]
+tab_overview, tab_quality, tab_eda, tab_models, tab_insights, tab_ask = st.tabs(
+    ["Overview", "Data quality", "Visual EDA", "Drivers & models", "AI summary", "Ask the data"]
 )
 
-# ---- Overview ---- #
+# ---------------- Overview ---------------- #
 
 with tab_overview:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Cleaned data (head)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Cleaned data (first 200 rows)</div>', unsafe_allow_html=True)
     st.dataframe(df_clean.head(200), use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Key metrics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Key numbers</div>', unsafe_allow_html=True)
     kpis = compute_kpis(df_clean)
     render_kpi_cards(kpis)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---- Data quality ---- #
+# ---------------- Data quality ---------------- #
 
-with tab_data_quality:
+with tab_quality:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Cleaning summary</div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        st.write("Shape after cleaning:", df_clean.shape)
+        st.write("Rows after cleaning:", df_clean.shape[0])
+        st.write("Columns after cleaning:", df_clean.shape[1])
         st.write("Dropped columns:", clean_info["dropped_columns"] or "None")
-        st.write("Rows dropped (all null):", clean_info["rows_dropped_all_null"])
+        st.write("Rows removed because everything was empty:", clean_info["rows_dropped_all_null"])
     with col2:
-        st.write("Converted to numeric:", clean_info["numeric_converted"] or "None")
-        st.write("Converted to datetime:", clean_info["datetime_converted"] or "None")
+        st.write("Columns converted to numbers:", clean_info["numeric_converted"] or "None")
+        st.write("Columns converted to dates:", clean_info["datetime_converted"] or "None")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    miss_fig = make_missing_bar(df_clean)
-    if miss_fig is not None:
+    missing_fig = make_missing_bar(df_clean)
+    if missing_fig is not None:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title">Missing values</div>', unsafe_allow_html=True)
-        st.plotly_chart(miss_fig, use_container_width=True)
+        st.plotly_chart(missing_fig, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-# ---- Visual EDA ---- #
+# ---------------- Visual EDA ---------------- #
 
 with tab_eda:
-    ts_fig = make_time_series(df_clean)
-    dist_fig = make_target_distribution(df_clean)
-    corr_matrix, corr_fig = make_corr_matrix(df_clean)
-    cat_fig = make_category_breakdown(df_clean)
+    figs = auto_charts(df_clean)
 
-    if ts_fig is not None:
+    for key, fig in figs.items():
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-title">Time series</div>', unsafe_allow_html=True)
-        st.plotly_chart(ts_fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    if dist_fig is not None:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-title">Target distribution</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(dist_fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    if not figs:
+        st.write("Not enough numeric or categorical information to build useful charts yet.")
 
-    if corr_fig is not None:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-title">Correlation heatmap</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(corr_fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    if cat_fig is not None:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-title">Category breakdown</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(cat_fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# ---- Modelling ---- #
+# ---------------- Models ---------------- #
 
 with tab_models:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown(
-        '<div class="section-title">Simple linear regressions (target vs each predictor)</div>',
+        '<div class="section-title">Simple relationships (one column vs main metric)</div>',
         unsafe_allow_html=True,
     )
     if simple_reg_df is None:
-        st.write("Not enough numeric variables to run simple linear regressions.")
+        st.write("Not enough numeric columns to compute relationships.")
     else:
-        st.dataframe(simple_reg_df, use_container_width=True)
+        # Rename columns to more friendly labels
+        display_df = simple_reg_df.rename(
+            columns={
+                "feature": "column",
+                "slope": "impact_per_unit",
+                "intercept": "baseline_level",
+                "r2": "fit_score",
+                "p_value": "evidence_score",
+                "n_obs": "rows_used",
+            }
+        )
+        st.dataframe(display_df, use_container_width=True)
         st.markdown(
-            "Higher absolute slope and higher R² indicate a stronger linear association. "
-            "Low p-values suggest the slope is statistically different from zero.",
+            "Higher absolute values in **impact_per_unit** and **fit_score** usually mean a stronger link with the main metric. "
+            "Smaller **evidence_score** values indicate stronger evidence that this link is real and not just noise.",
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-title">Multiple linear regression</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="section-title">Many-columns model (all main numbers together)</div>', unsafe_allow_html=True)
     if multi_coef_df is None:
         st.write(
-            "Not enough suitable numeric predictors or observations to fit a multiple regression model."
+            "There was not enough clean numeric information to build a reliable many-columns model. "
+            "Try adding more data or more numeric columns."
         )
     else:
-        st.dataframe(multi_coef_df, use_container_width=True)
-        with st.expander("Full regression summary"):
+        display_multi = multi_coef_df.rename(
+            columns={
+                "variable": "column",
+                "coefficient": "impact_per_unit",
+                "std_error": "uncertainty",
+                "p_value": "evidence_score",
+            }
+        )
+        st.dataframe(display_multi, use_container_width=True)
+        st.markdown(
+            "Columns with larger absolute **impact_per_unit** and lower **evidence_score** "
+            "are more likely to matter for the main business outcome."
+        )
+        with st.expander("Technical details (optional)"):
             st.text(multi_summary_text)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---- GPT interpretation ---- #
+# ---------------- AI summary ---------------- #
 
 with tab_insights:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">GPT interpretation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Plain-English summary and recommendations</div>', unsafe_allow_html=True)
     st.markdown(gpt_insights)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---- Ask the data ---- #
+# ---------------- Ask the data ---------------- #
 
 with tab_ask:
-    st.markdown('<div class="section-title">Ask questions about this dataset</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Ask questions about this data</div>', unsafe_allow_html=True)
+
+    example_questions = generate_dynamic_examples(df_clean)
+    placeholder = "You can ask things like:\n" + "\n".join(f"- {q}" for q in example_questions)
+
     question = st.text_area(
-        "Example: 'Which channels should I prioritise in October?', "
-        "'How sensitive is revenue to TV spend?', "
-        "'Is there evidence of diminishing returns on digital spend?'",
-        height=120,
+        placeholder,
+        height=160,
     )
     ask_button = st.button("Ask AI")
 
     if ask_button and question.strip():
-        with st.spinner("Preparing an answer based on the model outputs..."):
+        with st.spinner("Thinking based on the data and models..."):
             answer = call_gpt_qa(df_clean, gpt_insights, simple_reg_df, multi_coef_df, question)
         st.markdown(answer)
+
+    st.markdown("</div>", unsafe_allow_html=True)
