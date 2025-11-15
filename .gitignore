@@ -1,0 +1,13 @@
+# Virtual environment — never upload
+.venv/
+
+# Python junk
+__pycache__/
+*.pyc
+
+# Streamlit cache
+.streamlit/
+
+# OS junk
+.DS_Store
+Thumbs.db
