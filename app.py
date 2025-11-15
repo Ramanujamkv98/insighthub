@@ -191,8 +191,8 @@ if st.session_state.page == "landing":
     st.markdown("<br>", unsafe_allow_html=True)
 
     if st.button("Enter InsightHub", key="enter", help="Start analyzing your data"):
-        st.session_state.page = "app"
-        st.experimental_rerun()
+    st.session_state.page = "app"
+    st.rerun()
 
     st.stop()
 
