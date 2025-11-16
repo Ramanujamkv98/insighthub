@@ -203,7 +203,6 @@ Return valid JSON with fields:
    Rules:
    - each dict value must be a plotly figure
    - do not return numpy types, timestamps, or non-serializable objects
-   - only aggregate numeric columns (df.select_dtypes(include="number"))
    - no dataframes or lists inside the dict
 3. insights — business-friendly insights.
 
@@ -224,15 +223,9 @@ Return ONLY valid JSON.
 # 8. EXECUTE GPT CODE SAFELY
 # ======================================================================
 def run_dynamic_code(df, code, func_name):
-    df_safe = df.copy()
-
-    # ==== FIX: Prevent datetime “sum” errors from GPT code ====
-    dt_cols = df_safe.select_dtypes(include=["datetime64[ns]", "datetime64[ns, tz]"]).columns
-    df_safe[dt_cols] = df_safe[dt_cols].astype(str)
-
     local_vars = {}
-    exec(code, {"df": df_safe, "px": px, "pd": pd, "np": np}, local_vars)
-    return local_vars[func_name](df_safe)
+    exec(code, {"df": df, "px": px, "pd": pd, "np": np}, local_vars)
+    return local_vars[func_name](df)
 
 
 # ======================================================================
@@ -285,7 +278,7 @@ st.dataframe(df_semantic.head(50), use_container_width=True)
 
 
 # ======================================================================
-# 13. GPT AUTO EDA
+# 13. GPT AUTO ANALYSIS
 # ======================================================================
 st.subheader("GPT Auto EDA")
 
@@ -314,7 +307,7 @@ if st.button("Run GPT Analysis"):
 
 
 # ======================================================================
-# 14. ASK QUESTIONS ABOUT THE DATASET
+# 14. ASK QUESTIONS ABOUT DATA
 # ======================================================================
 st.subheader("Ask Questions About This Dataset")
 
