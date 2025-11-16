@@ -1,6 +1,6 @@
 # ======================================================================
-# DataPilot 7.0 – Ultra-Stable Semantic KPI Edition
-# Safe GPT Execution + JSON Hardening + Figure Validation
+# DataPilot 7.1 – Ultra-Stable Semantic KPI Edition
+# Safe GPT Execution + JSON Hardening + Datetime Fix
 # Streamlit Cloud Compatible
 # ======================================================================
 
@@ -15,11 +15,7 @@ import re
 # ======================================================================
 # STREAMLIT CONFIG
 # ======================================================================
-st.set_page_config(
-    page_title="DataPilot",
-    layout="wide",
-)
-
+st.set_page_config(page_title="DataPilot", layout="wide")
 st.title("DataPilot")
 
 
@@ -77,8 +73,8 @@ KPI_RULES = {
             "Total Revenue Generated": lambda df: df["revenue"].sum(),
             "Average Revenue per Sale": lambda df: df["revenue"].mean(),
             "Highest Revenue Sale": lambda df: df["revenue"].max(),
-            "Total Units Sold": lambda df: df["units_sold"].sum()
-        }
+            "Total Units Sold": lambda df: df["units_sold"].sum(),
+        },
     },
 
     "marketing": {
@@ -86,10 +82,12 @@ KPI_RULES = {
         "kpis": {
             "Total Marketing Spend": lambda df: df[[c for c in df.columns if "spend" in c]].sum().sum(),
             "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
-            "ROI (Revenue / Spend)": lambda df:
-                df["revenue"].sum() / df[[c for c in df.columns if "spend" in c]].sum().sum()
+            "ROI (Revenue / Spend)": lambda df: (
+                df["revenue"].sum() /
+                df[[c for c in df.columns if "spend" in c]].sum().sum()
                 if "revenue" in df else None
-        }
+            ),
+        },
     },
 
     "inventory": {
@@ -97,8 +95,8 @@ KPI_RULES = {
         "kpis": {
             "Average Daily Demand": lambda df: df["daily_demand"].mean(),
             "Total Stockouts": lambda df: df["stockout_flag"].sum() if "stockout_flag" in df else None,
-            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean()
-        }
+            "Average Inventory on Hand": lambda df: df["inventory_on_hand"].mean(),
+        },
     },
 
     "finance": {
@@ -106,9 +104,9 @@ KPI_RULES = {
         "kpis": {
             "Total Expenses": lambda df: df["expenses"].sum(),
             "Total Profit": lambda df: df["profit"].sum() if "profit" in df else None,
-            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None
-        }
-    }
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
+        },
+    },
 }
 
 
@@ -116,8 +114,10 @@ KPI_RULES = {
 # 4. DETECT KPI GROUP
 # ======================================================================
 def detect_kpi_group(df):
-    cols = df.columns
-    scores = {grp: sum(1 for kw in rule["keywords"] if kw in cols) for grp, rule in KPI_RULES.items()}
+    scores = {
+        grp: sum(1 for kw in rule["keywords"] if kw in df.columns)
+        for grp, rule in KPI_RULES.items()
+    }
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else None
 
@@ -136,7 +136,7 @@ def compute_semantic_kpis(df):
         return {
             f"Total {c}": num[c].sum(),
             f"Average {c}": num[c].mean(),
-            f"Maximum {c}": num[c].max()
+            f"Maximum {c}": num[c].max(),
         }
 
     results = {}
@@ -160,12 +160,14 @@ def auto_clean_df(df):
 
     for col in df.columns:
         if df[col].dtype == "object":
-            cleaned = (df[col].astype(str)
-                       .str.replace(",", "")
-                       .str.replace("$", "")
-                       .str.replace("₹", "")
-                       .str.replace("Rs", "")
-                       .str.strip())
+            cleaned = (
+                df[col].astype(str)
+                .str.replace(",", "")
+                .str.replace("$", "")
+                .str.replace("₹", "")
+                .str.replace("Rs", "")
+                .str.strip()
+            )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
         if any(k in col.lower() for k in ["date", "week", "day"]):
@@ -175,24 +177,22 @@ def auto_clean_df(df):
 
 
 # ======================================================================
-# 7. GPT JSON SAFE ANALYSIS
+# 7. GPT JSON-SAFE ANALYSIS
 # ======================================================================
 def ask_gpt_for_analysis(df):
     SAMPLE = df.head(40).to_csv(index=False)
 
     prompt = f"""
-Return ONLY valid JSON with keys:
+Return ONLY raw JSON with keys:
 - "cleaning_code"
 - "eda_code"
 - "insights"
 
 Rules:
 - cleaning_code must define clean_df(df)
-- eda_code must define make_figures(df) and return a dict of Plotly figures
-- Output ONLY RAW JSON (no backticks)
-- No markdown, no explanation
+- eda_code must define make_figures(df) — return dict of Plotly figures
+- No markdown, no backticks, no explanation
 - Only aggregate numeric columns
-
 Dataset sample:
 {SAMPLE}
 """
@@ -203,17 +203,15 @@ Dataset sample:
     )
 
     raw = res.choices[0].message.content.strip()
-
-    # strip markdown if any
     raw = raw.replace("```json", "").replace("```", "").strip()
 
-    # try direct parse
+    # Try direct parse
     try:
         return json.loads(raw)
     except:
         pass
 
-    # extract JSON with regex
+    # Try regex extraction
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         cleaned = match.group(0)
@@ -222,7 +220,7 @@ Dataset sample:
         except:
             pass
 
-    # remove trailing commas
+    # Remove trailing commas
     cleaned = re.sub(r",\s*}", "}", raw)
     cleaned = re.sub(r",\s*]", "]", cleaned)
 
@@ -240,20 +238,21 @@ Dataset sample:
 def run_dynamic_code(df, code, func_name):
     df_safe = df.copy()
 
-    # prevent datetime sum errors
-    dt_cols = df_safe.select_dtypes(include=["datetime64[ns]", "datetime64[ns, tz]"]).columns
+    # ----- FIX: SAFE DATETIME HANDLING -----
+    dt_cols = df_safe.select_dtypes(include=[np.datetime64]).columns
     df_safe[dt_cols] = df_safe[dt_cols].astype(str)
 
     local_vars = {}
     exec(code, {"df": df_safe, "px": px, "pd": pd, "np": np}, local_vars)
-
     return local_vars[func_name](df_safe)
 
 
 # ======================================================================
 # 9. FILE UPLOAD
 # ======================================================================
-uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader(
+    "Upload CSV or Excel", type=["csv", "xlsx"]
+)
 if not uploaded:
     st.stop()
 
@@ -273,29 +272,30 @@ df_semantic = harmonize_columns(df_clean)
 st.subheader("Executive Summary")
 kpis = compute_semantic_kpis(df_semantic)
 
-cols = st.columns(len(kpis) if len(kpis) > 0 else 1)
+cols = st.columns(len(kpis) if len(kpis) else 1)
 for (label, value), col in zip(kpis.items(), cols):
     with col:
         st.markdown(
             f"""
-            <div style="padding:16px; border-radius:10px; background:#10141a; border:1px solid #1f2937;">
+            <div style="padding:16px; border-radius:10px;
+            background:#10141a; border:1px solid #1f2937;">
                 <div style="font-size:14px; color:#9ca3af;">{label}</div>
-                <div style="font-size:22px; font-weight:600; margin-top:6px; color:white;">
+                <div style="font-size:22px; font-weight:600; color:white;">
                     {value:,.2f}
                 </div>
             </div>
             """,
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
 
 
 # ======================================================================
-# 12. RAW + CLEANED PREVIEW
+# 12. PREVIEWS
 # ======================================================================
 st.subheader("Raw Data")
 st.dataframe(df_raw.head(30))
 
-st.subheader("Cleaned + Semantic-Aligned")
+st.subheader("Cleaned + Semantic Aligned")
 st.dataframe(df_semantic.head(30))
 
 
@@ -337,12 +337,12 @@ if st.button("Ask"):
     if not q.strip():
         st.warning("Enter a question")
     else:
-        with st.spinner("Thinking..."):
+        with st.spinner("Thinking…"):
             sample = df_semantic.head(50).to_csv(index=False)
-            prompt = f"Dataset:\n{sample}\n\nQuestion: {q}\nAnswer in simple business language."
+            prompt = f"Dataset:\n{sample}\n\nQuestion: {q}\nAnswer clearly."
+
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}]
             )
         st.write(resp.choices[0].message.content)
-gi
