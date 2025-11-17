@@ -1,6 +1,6 @@
 # ======================================================================
-# DataPilot – Streamlit Cloud Stable Version
-# OpenAI v1.x | Plotly | Pandas | Clean + Safe Execution
+# DataPilot – Stable Streamlit Deployment Version
+# OpenAI v1.x | Plotly | Pandas | Fast + Safe
 # ======================================================================
 
 import os
@@ -20,7 +20,7 @@ st.title("📊 DataPilot – AI-Assisted Data Explorer")
 
 
 # ======================================================================
-# OPENAI CLIENT (Streamlit Cloud Safe)
+# OPENAI CLIENT
 # ======================================================================
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
@@ -31,7 +31,7 @@ if not api_key:
 
         Fix this:
         • Streamlit Cloud → Settings → Secrets:
-          OPENAI_API_KEY = your_key_here
+          OPENAI_API_KEY = your_api_key_here
         """
     )
     st.stop()
@@ -60,14 +60,13 @@ def semantic_match(col):
             return canonical
     return None
 
-
 def harmonize_columns(df):
     rename_map = {col: semantic_match(col) or col for col in df.columns}
     return df.rename(columns=rename_map)
 
 
 # ======================================================================
-# KPI RULE ENGINE (Streamlit-safe)
+# KPI RULE ENGINE
 # ======================================================================
 KPI_RULES = {
     "retail": {
@@ -97,13 +96,11 @@ KPI_RULES = {
     },
 }
 
-
 def detect_kpi_group(df):
     scores = {g: sum(k in df.columns for k in r["keywords"])
               for g, r in KPI_RULES.items()}
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else None
-
 
 def compute_kpis(df):
     group = detect_kpi_group(df)
@@ -125,7 +122,6 @@ def compute_kpis(df):
 def auto_clean_df(df):
     df = df.copy()
 
-    # remove unnamed columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
     for col in df.columns:
@@ -138,7 +134,6 @@ def auto_clean_df(df):
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
-        # parse dates
         if any(x in col.lower() for x in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
@@ -146,7 +141,7 @@ def auto_clean_df(df):
 
 
 # ======================================================================
-# GPT-ASSISTED EDA (Streamlit-safe)
+# GPT INSIGHTS
 # ======================================================================
 def ask_gpt(df):
     sample = df.head(40).to_csv(index=False)
@@ -157,27 +152,26 @@ Return ONLY JSON with keys:
 - "charts"
 
 Rules:
-- "charts" must be a list of chart suggestions (no code)
+- "charts" must be a list (no code)
 Sample:
 {sample}
 """
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
 
     text = res.choices[0].message.content
-
-    # extract JSON
     match = re.search(r"\{.*\}", text, re.DOTALL)
+
     if match:
         try:
             return json.loads(match.group(0))
         except:
             pass
 
-    return {"insights": "GPT failed to return JSON.", "charts": []}
+    return {"insights": "GPT failed to produce valid JSON.", "charts": []}
 
 
 # ======================================================================
@@ -189,7 +183,11 @@ if not uploaded:
     st.info("⬅️ Upload a dataset to begin.")
     st.stop()
 
-df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+df_raw = (
+    pd.read_csv(uploaded)
+    if uploaded.name.endswith(".csv")
+    else pd.read_excel(uploaded)
+)
 
 df_clean = auto_clean_df(df_raw)
 df_sem = harmonize_columns(df_clean)
@@ -221,7 +219,7 @@ st.dataframe(df_sem.head(20))
 
 
 # ======================================================================
-# GPT AUTO INSIGHTS (No dynamic exec — 100% Streamlit safe)
+# GPT AUTO INSIGHTS
 # ======================================================================
 st.subheader("🤖 GPT Insights")
 
@@ -241,18 +239,18 @@ if st.button("Generate AI Insights"):
 # ======================================================================
 st.subheader("💬 Ask a Question About Your Data")
 
-q = st.text_area("Your question")
+query = st.text_area("Your question")
 
 if st.button("Ask"):
-    if not q.strip():
+    if not query.strip():
         st.warning("Enter a question.")
     else:
         sample = df_sem.head(50).to_csv(index=False)
-        prompt = f"Dataset:\n{sample}\n\nQuestion: {q}\nAnswer in simple business language."
+        prompt = f"Dataset:\n{sample}\n\nQuestion: {query}\nAnswer clearly in business language."
 
         res = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
 
         st.write(res.choices[0].message.content)
