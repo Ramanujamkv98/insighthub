@@ -1,13 +1,13 @@
 # ======================================================================
-# DataPilot 7.2 – Ultra-Stable Semantic KPI Edition
-# Updated for OpenAI v1.x SDK + Streamlit Cloud Compatibility
+# DataPilot 7.3 – Ultra-Stable Semantic KPI Edition
+# Fixed Syntax Errors + Updated OpenAI SDK (v1.x)
 # ======================================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from openai import OpenAI       # ---- NEW SDK ----
+from openai import OpenAI
 import json
 import re
 
@@ -63,7 +63,7 @@ def harmonize_columns(df):
 
 
 # ======================================================================
-# 3. KPI RULE ENGINE
+# 3. KPI RULE ENGINE — FIXED LAMBDA FUNCTIONS
 # ======================================================================
 KPI_RULES = {
     "retail": {
@@ -102,8 +102,8 @@ KPI_RULES = {
         "keywords": ["profit", "expenses"],
         "kpis": {
             "Total Expenses": lambda df: df["expenses"].sum(),
-            "Total Profit": lambda df["profit"].sum() if "profit" in df else None,
-            "Total Revenue": lambda df["revenue"].sum() if "revenue" in df else None,
+            "Total Profit": lambda df: df["profit"].sum() if "profit" in df else None,
+            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
         },
     },
 }
@@ -190,7 +190,8 @@ Return ONLY raw JSON with keys:
 Rules:
 - cleaning_code must define clean_df(df)
 - eda_code must define make_figures(df)
-- No markdown, no backticks, no explanation
+- No markdown
+- No backticks
 Dataset sample:
 {SAMPLE}
 """
