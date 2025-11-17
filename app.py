@@ -1,14 +1,13 @@
 # ======================================================================
-# DataPilot 7.1 – Ultra-Stable Semantic KPI Edition
-# Safe GPT Execution + JSON Hardening + Datetime Fix
-# Streamlit Cloud Compatible
+# DataPilot 7.2 – Ultra-Stable Semantic KPI Edition
+# Updated for OpenAI v1.x SDK + Streamlit Cloud Compatibility
 # ======================================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from openai import OpenAI
+from openai import OpenAI       # ---- NEW SDK ----
 import json
 import re
 
@@ -103,8 +102,8 @@ KPI_RULES = {
         "keywords": ["profit", "expenses"],
         "kpis": {
             "Total Expenses": lambda df: df["expenses"].sum(),
-            "Total Profit": lambda df: df["profit"].sum() if "profit" in df else None,
-            "Total Revenue": lambda df: df["revenue"].sum() if "revenue" in df else None,
+            "Total Profit": lambda df["profit"].sum() if "profit" in df else None,
+            "Total Revenue": lambda df["revenue"].sum() if "revenue" in df else None,
         },
     },
 }
@@ -190,9 +189,8 @@ Return ONLY raw JSON with keys:
 
 Rules:
 - cleaning_code must define clean_df(df)
-- eda_code must define make_figures(df) — return dict of Plotly figures
+- eda_code must define make_figures(df)
 - No markdown, no backticks, no explanation
-- Only aggregate numeric columns
 Dataset sample:
 {SAMPLE}
 """
@@ -205,13 +203,11 @@ Dataset sample:
     raw = res.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
 
-    # Try direct parse
     try:
         return json.loads(raw)
     except:
         pass
 
-    # Try regex extraction
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         cleaned = match.group(0)
@@ -220,16 +216,10 @@ Dataset sample:
         except:
             pass
 
-    # Remove trailing commas
     cleaned = re.sub(r",\s*}", "}", raw)
     cleaned = re.sub(r",\s*]", "]", cleaned)
 
-    try:
-        return json.loads(cleaned)
-    except Exception as e:
-        st.error("GPT returned invalid JSON. Raw output:")
-        st.code(raw)
-        raise e
+    return json.loads(cleaned)
 
 
 # ======================================================================
@@ -237,8 +227,6 @@ Dataset sample:
 # ======================================================================
 def run_dynamic_code(df, code, func_name):
     df_safe = df.copy()
-
-    # ----- FIX: SAFE DATETIME HANDLING -----
     dt_cols = df_safe.select_dtypes(include=[np.datetime64]).columns
     df_safe[dt_cols] = df_safe[dt_cols].astype(str)
 
@@ -250,9 +238,7 @@ def run_dynamic_code(df, code, func_name):
 # ======================================================================
 # 9. FILE UPLOAD
 # ======================================================================
-uploaded = st.sidebar.file_uploader(
-    "Upload CSV or Excel", type=["csv", "xlsx"]
-)
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 if not uploaded:
     st.stop()
 
@@ -319,12 +305,9 @@ if st.button("Run GPT Analysis"):
     st.subheader("Charts")
     for name, fig in figs.items():
         try:
-            if hasattr(fig, "to_plotly_json"):
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"Skipping invalid figure: {name}")
+            st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.warning(f"Error rendering figure {name}: {e}")
+            st.warning(f"Error rendering {name}: {e}")
 
 
 # ======================================================================
