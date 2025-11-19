@@ -1,6 +1,6 @@
 # ======================================================================
-# DataPilot – Medium Version
-# KPIs + Plotly Visuals + GPT Insights
+# DataPilot – Pro Visual Version (No Heavy NLP)
+# KPIs + Plotly Visuals + GPT Insights + Q&A
 # Cloud Run + OpenAI v1.x Compatible
 # ======================================================================
 
@@ -217,8 +217,8 @@ df_sem = harmonize_columns(df_clean)
 # ======================================================================
 # LAYOUT: TABS
 # ======================================================================
-tab_overview, tab_visuals, tab_ai = st.tabs(
-    ["📌 Overview & KPIs", "📈 Visual Explorer", "🤖 AI Insights & Q&A"]
+tab_overview, tab_visuals, tab_diag, tab_ai = st.tabs(
+    ["📌 Overview & KPIs", "📈 Visual Explorer", "🧪 Diagnostics", "🤖 AI Insights & Q&A"]
 )
 
 # ======================================================================
@@ -234,7 +234,10 @@ with tab_overview:
         for (label, value), col in zip(kpis.items(), cols):
             col.metric(label, f"{value:,.2f}")
     else:
-        st.write("No domain-specific KPIs detected. Try including columns like revenue, units, spend, inventory, etc.")
+        st.write(
+            "No domain-specific KPIs detected. "
+            "Try including columns like revenue, units, spend, inventory, etc."
+        )
 
     st.markdown("---")
     st.subheader("🧾 Raw Data Preview")
@@ -258,7 +261,12 @@ with tab_visuals:
     else:
         viz_type = st.selectbox(
             "Select visualization type",
-            ["Histogram (Numeric)", "Bar (Categorical)", "Time Series (Date + Numeric)"],
+            [
+                "Histogram (Numeric)",
+                "Bar (Categorical)",
+                "Time Series (Date + Numeric)",
+                "Scatter (Numeric vs Numeric)",
+            ],
         )
 
         if viz_type == "Histogram (Numeric)":
@@ -274,9 +282,16 @@ with tab_visuals:
                 st.warning("No suitable categorical columns available.")
             else:
                 col = st.selectbox("Select categorical column", cat_cols)
-                counts = df_sem[col].value_counts().reset_index()
-                counts.columns = [col, "Count"]
-                fig = px.bar(counts, x=col, y="Count", title=f"Value counts for {col}")
+                metric = st.selectbox("Metric", ["Count"] + num_cols)
+
+                if metric == "Count":
+                    counts = df_sem[col].value_counts().reset_index()
+                    counts.columns = [col, "Count"]
+                    fig = px.bar(counts, x=col, y="Count", title=f"Value counts for {col}")
+                else:
+                    grouped = df_sem.groupby(col)[metric].sum().reset_index()
+                    fig = px.bar(grouped, x=col, y=metric, title=f"{metric} by {col}")
+
                 st.plotly_chart(fig, use_container_width=True)
 
         elif viz_type == "Time Series (Date + Numeric)":
@@ -305,8 +320,52 @@ with tab_visuals:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+        elif viz_type == "Scatter (Numeric vs Numeric)":
+            if len(num_cols) < 2:
+                st.warning("Need at least two numeric columns for a scatter plot.")
+            else:
+                x_col = st.selectbox("X-axis", num_cols, key="scatter_x")
+                y_col = st.selectbox("Y-axis", num_cols, key="scatter_y")
+                color_col = st.selectbox("Color (optional)", [None] + cat_cols, key="scatter_color")
+
+                if color_col and color_col in df_sem.columns:
+                    fig = px.scatter(df_sem, x=x_col, y=y_col, color=color_col,
+                                     title=f"{y_col} vs {x_col} colored by {color_col}")
+                else:
+                    fig = px.scatter(df_sem, x=x_col, y=y_col,
+                                     title=f"{y_col} vs {x_col}")
+
+                st.plotly_chart(fig, use_container_width=True)
+
 # ======================================================================
-# TAB 3: AI INSIGHTS & Q&A
+# TAB 3: DIAGNOSTICS
+# ======================================================================
+with tab_diag:
+    st.subheader("🧪 Data Diagnostics")
+
+    st.markdown("### Numeric Summary")
+    num_cols = get_numeric_columns(df_sem)
+    if num_cols:
+        st.dataframe(df_sem[num_cols].describe().T)
+    else:
+        st.write("No numeric columns to summarize.")
+
+    st.markdown("---")
+    st.markdown("### Correlation Matrix (Numeric Columns)")
+    if len(num_cols) >= 2:
+        corr = df_sem[num_cols].corr()
+        fig_corr = px.imshow(
+            corr,
+            text_auto=True,
+            aspect="auto",
+            title="Correlation Heatmap",
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+    else:
+        st.write("Need at least two numeric columns to show correlations.")
+
+# ======================================================================
+# TAB 4: AI INSIGHTS & Q&A
 # ======================================================================
 with tab_ai:
     st.subheader("🤖 AI Insights")
