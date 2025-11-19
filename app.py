@@ -1,5 +1,6 @@
 # ======================================================================
-# DataPilot – Lean Pro Version (Cloud Run Optimized)
+# DataPilot – FULL Semantic Version (Cloud Run optimized)
+# Semantic Understanding of Column Headers + Dataset Type Detection
 # ======================================================================
 
 import os
@@ -14,7 +15,7 @@ from openai import OpenAI
 # STREAMLIT CONFIG
 # ======================================================================
 st.set_page_config(page_title="DataPilot", layout="wide")
-st.title("📊 DataPilot – AI-Assisted Data Explorer")
+st.title("🧠 DataPilot – AI-Assisted Semantic Data Explorer")
 
 # ======================================================================
 # OPENAI CLIENT
@@ -22,101 +23,69 @@ st.title("📊 DataPilot – AI-Assisted Data Explorer")
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ OPENAI_API_KEY not found. Add it in Cloud Run → Variables & Secrets.")
+    st.error("❌ OPENAI_API_KEY not found. Add it in Cloud Run → Variables")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
 # ======================================================================
 # SEMANTIC COLUMN MAP
+# (Synonym dictionary for understanding header meanings)
 # ======================================================================
-SEMANTIC_MAP = {
-    "revenue": ["revenue", "sales", "gmv", "turnover", "amount"],
-    "units_sold": ["units", "sold", "qty", "quantity"],
-    "daily_demand": ["demand", "orders", "order_qty"],
-    "inventory_on_hand": ["inventory", "stock", "onhand"],
-    "stockout_flag": ["oos", "stockout", "out_of_stock"],
-    "spend": ["spend", "cost", "budget", "marketing_spend"],
-    "profit": ["profit", "net_profit"],
-    "expenses": ["expense", "expenses"],
+SEMANTIC_TAGS = {
+    "revenue": ["revenue", "sales", "gmv", "turnover", "amount", "income"],
+    "units_sold": ["units", "qty", "sold", "quantity", "volume"],
+    "spend": ["spend", "ad_spend", "marketing_spend", "cost", "budget"],
+    "profit": ["profit", "margin", "net"],
+    "expenses": ["expense", "expenses", "operational_cost"],
+    "inventory": ["inventory", "stock", "onhand", "inv"],
+    "demand": ["demand", "orders", "order_qty"],
+    "date": ["date", "day", "time", "timestamp"],
+    "customer": ["customer", "client", "user", "buyer"],
+    "id": ["id", "code", "sku", "item"],
 }
 
-def semantic_match(col: str):
+
+def detect_semantic_label(col: str):
     col_l = col.lower()
-    for canonical, synonyms in SEMANTIC_MAP.items():
-        if any(x in col_l for x in synonyms):
-            return canonical
+    for label, synonyms in SEMANTIC_TAGS.items():
+        if any(word in col_l for word in synonyms):
+            return label
     return None
 
-def harmonize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    rename_map = {col: semantic_match(col) or col for col in df.columns}
-    return df.rename(columns=rename_map)
-
 
 # ======================================================================
-# KPI RULE ENGINE
+# DATASET TYPE DETECTION
 # ======================================================================
-KPI_RULES = {
-    "retail": {
-        "keywords": ["revenue", "units_sold"],
-        "kpis": {
-            "Total Revenue": lambda df: df.get("revenue", pd.Series(dtype=float)).sum(),
-            "Avg Revenue per Sale": lambda df: df.get("revenue", pd.Series(dtype=float)).mean(),
-            "Units Sold": lambda df: df.get("units_sold", pd.Series(dtype=float)).sum(),
-        },
-    },
-    "marketing": {
-        "keywords": ["spend"],
-        "kpis": {
-            "Total Spend": lambda df: df.filter(regex="spend").sum().sum(),
-            "ROI": lambda df: (
-                df.get("revenue", pd.Series(dtype=float)).sum()
-                / df.filter(regex="spend").sum().sum()
-            )
-            if "revenue" in df.columns and df.filter(regex="spend").sum().sum() > 0
-            else None,
-        },
-    },
-    "inventory": {
-        "keywords": ["inventory_on_hand", "daily_demand"],
-        "kpis": {
-            "Avg Daily Demand": lambda df: df.get("daily_demand", pd.Series(dtype=float)).mean(),
-            "Avg Inventory On-Hand": lambda df: df.get("inventory_on_hand", pd.Series(dtype=float)).mean(),
-        },
-    },
+DATASET_SIGNATURES = {
+    "Retail Sales": ["revenue", "units_sold", "profit"],
+    "Marketing Performance": ["spend", "revenue", "customer"],
+    "Inventory & Supply Chain": ["inventory", "demand", "stockout"],
+    "Finance": ["expenses", "revenue", "profit"],
+    "E-Commerce": ["order", "customer", "gmv", "units_sold"],
+    "HR / Employees": ["employee", "salary", "department"],
+    "Operations / Manufacturing": ["production", "inventory", "defect"],
+    "Survey / Feedback": ["rating", "feedback", "comment"],
+    "Healthcare": ["patient", "treatment", "diagnosis"],
 }
 
-def detect_kpi_group(df: pd.DataFrame):
-    scores = {g: sum(k in df.columns for k in r["keywords"]) for g, r in KPI_RULES.items()}
+def detect_dataset_type(semantic_cols: list[str]):
+    scores = {}
+    for ds_type, keywords in DATASET_SIGNATURES.items():
+        matches = sum(1 for k in keywords if k in semantic_cols)
+        scores[ds_type] = matches
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else None
-
-def compute_kpis(df: pd.DataFrame):
-    group = detect_kpi_group(df)
-    if not group:
-        return {}
-    results = {}
-    for label, func in KPI_RULES[group]["kpis"].items():
-        try:
-            val = func(df)
-            if val is not None and not pd.isna(val):
-                results[label] = float(val)
-        except:
-            pass
-    return results
+    return best if scores[best] > 0 else "General Dataset"
 
 
 # ======================================================================
-# AUTO CLEANING
+# AUTOMATIC CLEANING
 # ======================================================================
 def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
-    # Remove unnamed columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
     for col in df.columns:
-        # Clean numbers
         if df[col].dtype == object:
             cleaned = (
                 df[col].astype(str)
@@ -126,8 +95,7 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
-        # Try date parsing
-        if any(key in col.lower() for key in ["date", "time", "week", "day"]):
+        if any(k in col.lower() for k in ["date", "time", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
     return df
@@ -136,72 +104,126 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
 # ======================================================================
 # GPT INSIGHTS
 # ======================================================================
-def ask_gpt(df: pd.DataFrame):
+def ask_gpt(df: pd.DataFrame, dataset_type: str):
     sample = df.head(40).astype(str).to_csv(index=False)
 
     prompt = f"""
-Return ONLY valid JSON with keys:
-- "insights": a short paragraph
-- "charts": a list of chart ideas
+You are a senior data analyst.
 
-Dataset sample:
+Dataset type: {dataset_type}
+
+Analyze the data sample and return ONLY VALID JSON with:
+
+- "insights": 4–6 key insights
+- "recommended_metrics": 3–5 KPIs relevant to dataset type
+- "recommended_charts": 4–6 visualization ideas
+
+Data sample:
 {sample}
 """
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
     )
 
     text = res.choices[0].message.content
 
-    # Extract JSON
     try:
         start = text.find("{")
         end = text.rfind("}")
-        parsed = json.loads(text[start:end+1])
-        return parsed
+        return json.loads(text[start:end+1])
     except:
-        return {"insights": "GPT failed to generate valid JSON.", "charts": []}
+        return {
+            "insights": ["GPT failed to parse JSON."],
+            "recommended_metrics": [],
+            "recommended_charts": [],
+        }
 
 
 # ======================================================================
 # FILE UPLOAD
 # ======================================================================
 uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
-
 if not uploaded:
-    st.info("⬅️ Upload a dataset to begin.")
+    st.info("⬅ Upload a dataset to begin.")
     st.stop()
 
 df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-
 df_clean = auto_clean_df(df_raw)
-df_sem = harmonize_columns(df_clean)
+
+# Detect semantic column meanings
+semantic_map = {col: detect_semantic_label(col) for col in df_clean.columns}
+semantic_cols = [v for v in semantic_map.values() if v]
+
+# Identify dataset type
+dataset_type = detect_dataset_type(semantic_cols)
 
 
 # ======================================================================
-# KPI DASHBOARD
+# SHOW SEMANTIC ANALYSIS
 # ======================================================================
-st.subheader("📌 Executive Summary")
-kpis = compute_kpis(df_sem)
+st.subheader("🧠 Semantic Understanding of Your Dataset")
+
+semantic_df = pd.DataFrame({
+    "Column": list(df_clean.columns),
+    "Semantic Meaning": [semantic_map[col] or "unknown" for col in df_clean.columns]
+})
+
+st.dataframe(semantic_df)
+
+st.success(f"**Detected Dataset Type → {dataset_type}**")
+
+
+# ======================================================================
+# KPI SUGGESTIONS
+# ======================================================================
+st.subheader("📌 KPI Dashboard (Auto-Detected)")
+
+def compute_kpis(df, semantic_map):
+    results = {}
+
+    # Revenue
+    rev_col = [c for c, s in semantic_map.items() if s == "revenue"]
+    if rev_col:
+        results["Total Revenue"] = df[rev_col[0]].sum()
+
+    # Units sold
+    u_col = [c for c, s in semantic_map.items() if s == "units_sold"]
+    if u_col:
+        results["Units Sold"] = df[u_col[0]].sum()
+
+    # Spend
+    s_col = [c for c, s in semantic_map.items() if s == "spend"]
+    if s_col:
+        results["Total Spend"] = df[s_col[0]].sum()
+
+    # ROI if both exist
+    if rev_col and s_col and df[s_col[0]].sum() > 0:
+        results["ROI"] = df[rev_col[0]].sum() / df[s_col[0]].sum()
+
+    return results
+
+kpis = compute_kpis(df_clean, semantic_map)
 
 if kpis:
     cols = st.columns(len(kpis))
-    for (label, value), col in zip(kpis.items(), cols):
-        col.metric(label, f"{value:,.2f}")
+    for (k, v), col in zip(kpis.items(), cols):
+        col.metric(k, f"{v:,.2f}")
 else:
-    st.write("No KPIs detected.")
+    st.info("No KPIs detected.")
+
 
 
 # ======================================================================
-# DATA PREVIEW
+# RAW + CLEANED DATA
 # ======================================================================
-st.subheader("🧾 Raw Data")
+st.subheader("🧾 Raw Data Preview")
 st.dataframe(df_raw.head(20))
 
-st.subheader("🧹 Cleaned + Semantic-Aligned Data")
-st.dataframe(df_sem.head(20))
+st.subheader("🧹 Cleaned Data")
+st.dataframe(df_clean.head(20))
 
 
 # ======================================================================
@@ -209,30 +231,24 @@ st.dataframe(df_sem.head(20))
 # ======================================================================
 st.subheader("📊 Visualize Your Data")
 
-numeric_cols = df_sem.select_dtypes(include=["int64", "float64"]).columns.tolist()
-all_cols = df_sem.columns.tolist()
+numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+all_cols = df_clean.columns.tolist()
 
-if len(all_cols) > 0:
+if all_cols:
 
-    chart_type = st.selectbox(
-        "Select chart type", ["Line Chart", "Bar Chart", "Scatter Plot", "Histogram"]
-    )
-
+    chart_type = st.selectbox("Chart type", ["Line", "Bar", "Scatter", "Histogram"])
     x_axis = st.selectbox("X-axis", all_cols)
     y_axis = st.selectbox("Y-axis", numeric_cols)
 
     if st.button("Generate Chart"):
-        if chart_type == "Line Chart":
-            fig = px.line(df_sem, x=x_axis, y=y_axis)
-
-        elif chart_type == "Bar Chart":
-            fig = px.bar(df_sem, x=x_axis, y=y_axis)
-
-        elif chart_type == "Scatter Plot":
-            fig = px.scatter(df_sem, x=x_axis, y=y_axis)
-
-        elif chart_type == "Histogram":
-            fig = px.histogram(df_sem, x=x_axis)
+        if chart_type == "Line":
+            fig = px.line(df_clean, x=x_axis, y=y_axis)
+        elif chart_type == "Bar":
+            fig = px.bar(df_clean, x=x_axis, y=y_axis)
+        elif chart_type == "Scatter":
+            fig = px.scatter(df_clean, x=x_axis, y=y_axis)
+        else:
+            fig = px.histogram(df_clean, x=x_axis)
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -244,37 +260,44 @@ st.subheader("🤖 AI Insights")
 
 if st.button("Generate AI Insights"):
     with st.spinner("Thinking…"):
-        gpt = ask_gpt(df_sem)
+        g = ask_gpt(df_clean, dataset_type)
 
-    st.write("### 📘 Key Insights")
-    st.write(gpt.get("insights", ""))
+    st.write("### 🔍 Key Insights")
+    for i in g["insights"]:
+        st.write("•", i)
 
-    st.write("### 📊 Suggested Charts")
-    for idea in gpt.get("charts", []):
-        st.write("- " + idea)
+    st.write("### 📌 Recommended KPIs")
+    for i in g["recommended_metrics"]:
+        st.write("•", i)
+
+    st.write("### 📊 Recommended Charts")
+    for i in g["recommended_charts"]:
+        st.write("•", i)
 
 
 # ======================================================================
-# Q&A
+# Q&A SECTION
 # ======================================================================
 st.subheader("💬 Ask a Question")
 
-query = st.text_area("Ask anything about your dataset:")
+question = st.text_area("Ask anything about your dataset")
 
 if st.button("Ask"):
-    if query.strip() == "":
-        st.warning("Please enter a question.")
-    else:
-        sample = df_sem.head(40).to_csv(index=False)
-        prompt = f"""
+    sample = df_clean.head(40).to_csv(index=False)
+    prompt = f"""
+Dataset type: {dataset_type}
+
 Dataset:
 {sample}
 
-Question: {query}
-Answer clearly in business language. Use only the data provided.
+Question: {question}
+
+Answer using only the data and correct business language.
 """
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        st.write(res.choices[0].message.content)
+
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    st.write(res.choices[0].message.content)
