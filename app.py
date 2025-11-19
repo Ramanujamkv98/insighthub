@@ -1,6 +1,7 @@
 # ======================================================================
-# DataPilot – GCP Deployment Version
-# Fully Cloud Run Compatible
+# DataPilot – Medium Version
+# KPIs + Plotly Visuals + GPT Insights
+# Cloud Run + OpenAI v1.x Compatible
 # ======================================================================
 
 import os
@@ -8,6 +9,7 @@ import json
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 from openai import OpenAI
 
 # ======================================================================
@@ -17,12 +19,12 @@ st.set_page_config(page_title="DataPilot", layout="wide")
 st.title("📊 DataPilot – AI-Assisted Data Explorer")
 
 # ======================================================================
-# OPENAI CLIENT (GCP Version)
+# OPENAI CLIENT (Cloud Run: uses env var)
 # ======================================================================
-api_key = os.getenv("OPENAI_API_KEY")   # <-- Cloud Run uses environment variables ONLY
+api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ OPENAI_API_KEY not found. Set it in Cloud Run → Environment Variables tab.")
+    st.error("❌ OPENAI_API_KEY not found. Set it in Cloud Run → Environment variables.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -69,8 +71,8 @@ KPI_RULES = {
         "kpis": {
             "Total Spend": lambda df: df.filter(regex="spend").sum().sum(),
             "ROI": lambda df: (
-                df.get("revenue", pd.Series(dtype=float)).sum() /
-                df.filter(regex="spend").sum().sum()
+                df.get("revenue", pd.Series(dtype=float)).sum()
+                / df.filter(regex="spend").sum().sum()
             ) if "revenue" in df.columns and df.filter(regex="spend").sum().sum() > 0 else None,
         },
     },
@@ -99,7 +101,7 @@ def compute_kpis(df: pd.DataFrame):
             val = func(df)
             if val is not None and not pd.isna(val):
                 results[name] = float(val)
-        except:
+        except Exception:
             pass
     return results
 
@@ -109,9 +111,11 @@ def compute_kpis(df: pd.DataFrame):
 def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
+    # Drop unnamed index-like columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
     for col in df.columns:
+        # Try numeric cleanup for object columns
         if df[col].dtype == object:
             cleaned = (
                 df[col].astype(str)
@@ -121,6 +125,7 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
+        # Try date parsing based on column name
         if any(keyword in col.lower() for keyword in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
@@ -130,14 +135,24 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
 # GPT INSIGHTS
 # ======================================================================
 def ask_gpt(df: pd.DataFrame):
+    # Limit sample size to keep token usage manageable
     sample = df.head(40).astype(str).to_csv(index=False)
 
     prompt = f"""
-Return ONLY valid JSON:
+You are a senior analytics consultant.
+Return ONLY valid JSON in this structure:
+
 {{
-  "insights": "...",
-  "charts": ["...", "..."]
+  "insights": "short paragraph of 4–6 sentences with key trends and risks",
+  "charts": [
+    "Chart idea 1",
+    "Chart idea 2",
+    "Chart idea 3"
+  ]
 }}
+
+Base your analysis ONLY on the dataset sample below.
+If something cannot be inferred, do not guess.
 
 Dataset sample:
 {sample}
@@ -146,24 +161,44 @@ Dataset sample:
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        temperature=0.25,
     )
 
     text = res.choices[0].message.content
 
-    # Parse JSON safely
+    # Try to extract JSON from the response
     try:
         start = text.find("{")
         end = text.rfind("}")
-        if start != -1 and end != -1:
-            return json.loads(text[start : end + 1])
-    except:
+        if start != -1 and end != -1 and end > start:
+            candidate = text[start : end + 1]
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception:
         pass
 
-    return {"insights": "GPT failed to produce JSON.", "charts": []}
+    return {"insights": "GPT failed to produce valid JSON.", "charts": []}
 
 # ======================================================================
-# FILE UPLOAD (CSV / Excel)
+# SIMPLE HELPERS FOR VISUALS
+# ======================================================================
+def get_numeric_columns(df: pd.DataFrame):
+    return df.select_dtypes(include=["number"]).columns.tolist()
+
+def get_categorical_columns(df: pd.DataFrame, max_unique: int = 50):
+    cats = []
+    for col in df.columns:
+        if df[col].dtype == "object" or df[col].dtype.name == "category":
+            if df[col].nunique(dropna=True) <= max_unique:
+                cats.append(col)
+    return cats
+
+def get_date_columns(df: pd.DataFrame):
+    return df.select_dtypes(include=["datetime64[ns]", "datetime64[ns, UTC]"]).columns.tolist()
+
+# ======================================================================
+# FILE UPLOAD
 # ======================================================================
 uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
@@ -180,69 +215,143 @@ df_clean = auto_clean_df(df_raw)
 df_sem = harmonize_columns(df_clean)
 
 # ======================================================================
-# KPI DASHBOARD
+# LAYOUT: TABS
 # ======================================================================
-st.subheader("📌 Executive Summary")
-kpis = compute_kpis(df_sem)
-
-if kpis:
-    cols = st.columns(len(kpis))
-    for (label, value), col in zip(kpis.items(), cols):
-        col.metric(label, f"{value:,.2f}")
-else:
-    st.write("No KPIs detected.")
+tab_overview, tab_visuals, tab_ai = st.tabs(
+    ["📌 Overview & KPIs", "📈 Visual Explorer", "🤖 AI Insights & Q&A"]
+)
 
 # ======================================================================
-# DATA PREVIEWS
+# TAB 1: OVERVIEW & KPIs
 # ======================================================================
-st.subheader("🧾 Raw Data Preview")
-st.dataframe(df_raw.head(20))
+with tab_overview:
+    st.subheader("📌 Executive Summary")
 
-st.subheader("🧹 Cleaned + Harmonized Data")
-st.dataframe(df_sem.head(20))
+    kpis = compute_kpis(df_sem)
 
-# ======================================================================
-# GPT AUTO INSIGHTS
-# ======================================================================
-st.subheader("🤖 GPT Insights")
-
-if st.button("Generate AI Insights"):
-    with st.spinner("Analyzing with AI…"):
-        gpt = ask_gpt(df_sem)
-
-    st.subheader("📘 Insights")
-    st.write(gpt.get("insights", ""))
-
-    st.subheader("📊 Suggested Charts")
-    for i, c in enumerate(gpt.get("charts", []), 1):
-        st.write(f"{i}. {c}")
-
-# ======================================================================
-# Q&A SECTION
-# ======================================================================
-st.subheader("💬 Ask a Question About Your Data")
-
-query = st.text_area("Your question")
-
-if st.button("Ask"):
-    if not query.strip():
-        st.warning("Enter a question.")
+    if kpis:
+        cols = st.columns(len(kpis))
+        for (label, value), col in zip(kpis.items(), cols):
+            col.metric(label, f"{value:,.2f}")
     else:
-        sample = df_sem.head(50).to_csv(index=False)
+        st.write("No domain-specific KPIs detected. Try including columns like revenue, units, spend, inventory, etc.")
 
-        prompt = f"""
-Dataset:
-{sample}
+    st.markdown("---")
+    st.subheader("🧾 Raw Data Preview")
+    st.dataframe(df_raw.head(20))
 
-Question: {query}
+    st.subheader("🧹 Cleaned + Semantic-Aligned Data")
+    st.dataframe(df_sem.head(20))
 
-Answer clearly in business language.
-Do NOT guess or invent columns.
-"""
+# ======================================================================
+# TAB 2: VISUAL EXPLORER (PLOTLY)
+# ======================================================================
+with tab_visuals:
+    st.subheader("📈 Data Visual Explorer (Plotly)")
 
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+    num_cols = get_numeric_columns(df_sem)
+    cat_cols = get_categorical_columns(df_sem)
+    date_cols = get_date_columns(df_sem)
+
+    if not num_cols and not cat_cols and not date_cols:
+        st.info("No suitable numeric, categorical, or date columns detected for visualization.")
+    else:
+        viz_type = st.selectbox(
+            "Select visualization type",
+            ["Histogram (Numeric)", "Bar (Categorical)", "Time Series (Date + Numeric)"],
         )
 
-        st.write(res.choices[0].message.content)
+        if viz_type == "Histogram (Numeric)":
+            if not num_cols:
+                st.warning("No numeric columns available.")
+            else:
+                col = st.selectbox("Select numeric column", num_cols)
+                fig = px.histogram(df_sem, x=col, nbins=30, title=f"Distribution of {col}")
+                st.plotly_chart(fig, use_container_width=True)
+
+        elif viz_type == "Bar (Categorical)":
+            if not cat_cols:
+                st.warning("No suitable categorical columns available.")
+            else:
+                col = st.selectbox("Select categorical column", cat_cols)
+                counts = df_sem[col].value_counts().reset_index()
+                counts.columns = [col, "Count"]
+                fig = px.bar(counts, x=col, y="Count", title=f"Value counts for {col}")
+                st.plotly_chart(fig, use_container_width=True)
+
+        elif viz_type == "Time Series (Date + Numeric)":
+            if not date_cols:
+                st.warning("No date-like columns detected.")
+            elif not num_cols:
+                st.warning("No numeric columns available for aggregation.")
+            else:
+                date_col = st.selectbox("Select date column", date_cols)
+                num_col = st.selectbox("Select numeric column", num_cols)
+                agg_fn = st.selectbox("Aggregation", ["sum", "mean"])
+
+                df_ts = df_sem[[date_col, num_col]].dropna()
+                df_ts = df_ts.sort_values(by=date_col)
+
+                if agg_fn == "sum":
+                    grouped = df_ts.groupby(date_col)[num_col].sum().reset_index()
+                else:
+                    grouped = df_ts.groupby(date_col)[num_col].mean().reset_index()
+
+                fig = px.line(
+                    grouped,
+                    x=date_col,
+                    y=num_col,
+                    title=f"{agg_fn.title()} of {num_col} over time ({date_col})",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+# ======================================================================
+# TAB 3: AI INSIGHTS & Q&A
+# ======================================================================
+with tab_ai:
+    st.subheader("🤖 AI Insights")
+
+    if st.button("Generate AI Insights from Dataset"):
+        with st.spinner("Analyzing data with GPT…"):
+            gpt = ask_gpt(df_sem)
+
+        st.subheader("📘 Key Insights")
+        st.write(gpt.get("insights", ""))
+
+        st.subheader("📊 Suggested Charts")
+        charts = gpt.get("charts", [])
+        if isinstance(charts, list) and charts:
+            for i, c in enumerate(charts, 1):
+                st.markdown(f"**{i}.** {c}")
+        else:
+            st.write("No chart suggestions returned.")
+
+    st.markdown("---")
+    st.subheader("💬 Ask a Question About Your Data")
+
+    query = st.text_area("Your question")
+
+    if st.button("Ask GPT About This Dataset"):
+        if not query.strip():
+            st.warning("Enter a question.")
+        else:
+            sample = df_sem.head(50).to_csv(index=False)
+
+            prompt = f"""
+Dataset sample:
+{sample}
+
+You are a business analyst. Answer the user's question using ONLY this data.
+If the answer cannot be derived, say so clearly.
+
+Question: {query}
+"""
+
+            with st.spinner("Thinking…"):
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                )
+
+            st.write(res.choices[0].message.content)
