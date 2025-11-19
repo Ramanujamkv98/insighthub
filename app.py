@@ -1,6 +1,6 @@
 # ======================================================================
 # DataPilot – FULL Semantic Version (Cloud Run optimized)
-# Semantic Understanding of Column Headers + Dataset Type Detection
+# Semantic Understanding + KPIs + Visualizations + AI Insights
 # ======================================================================
 
 import os
@@ -18,19 +18,18 @@ st.set_page_config(page_title="DataPilot", layout="wide")
 st.title("🧠 DataPilot – AI-Assisted Semantic Data Explorer")
 
 # ======================================================================
-# OPENAI CLIENT
+# OPENAI CLIENT (Cloud Run Compatible – NO st.secrets)
 # ======================================================================
 api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ OPENAI_API_KEY not found. Add it in Cloud Run → Variables")
+    st.error("❌ OPENAI_API_KEY missing. Add it in Cloud Run → Variables.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
 # ======================================================================
 # SEMANTIC COLUMN MAP
-# (Synonym dictionary for understanding header meanings)
 # ======================================================================
 SEMANTIC_TAGS = {
     "revenue": ["revenue", "sales", "gmv", "turnover", "amount", "income"],
@@ -39,14 +38,16 @@ SEMANTIC_TAGS = {
     "profit": ["profit", "margin", "net"],
     "expenses": ["expense", "expenses", "operational_cost"],
     "inventory": ["inventory", "stock", "onhand", "inv"],
-    "demand": ["demand", "orders", "order_qty"],
+    "demand": ["demand", "orders", "order_qty", "demand_qty"],
     "date": ["date", "day", "time", "timestamp"],
     "customer": ["customer", "client", "user", "buyer"],
     "id": ["id", "code", "sku", "item"],
+    "rating": ["rating", "score", "feedback"],
 }
 
 
 def detect_semantic_label(col: str):
+    """Return semantic meaning of a column"""
     col_l = col.lower()
     for label, synonyms in SEMANTIC_TAGS.items():
         if any(word in col_l for word in synonyms):
@@ -60,28 +61,31 @@ def detect_semantic_label(col: str):
 DATASET_SIGNATURES = {
     "Retail Sales": ["revenue", "units_sold", "profit"],
     "Marketing Performance": ["spend", "revenue", "customer"],
-    "Inventory & Supply Chain": ["inventory", "demand", "stockout"],
+    "Inventory & Supply Chain": ["inventory", "demand"],
     "Finance": ["expenses", "revenue", "profit"],
-    "E-Commerce": ["order", "customer", "gmv", "units_sold"],
-    "HR / Employees": ["employee", "salary", "department"],
-    "Operations / Manufacturing": ["production", "inventory", "defect"],
-    "Survey / Feedback": ["rating", "feedback", "comment"],
-    "Healthcare": ["patient", "treatment", "diagnosis"],
+    "E-Commerce": ["customer", "orders", "gmv"],
+    "Survey / Feedback": ["rating", "feedback"],
+    "Healthcare": ["patient", "treatment"],
+    "HR / Employees": ["salary", "employee"],
 }
 
-def detect_dataset_type(semantic_cols: list[str]):
+def detect_dataset_type(semantic_cols):
     scores = {}
     for ds_type, keywords in DATASET_SIGNATURES.items():
-        matches = sum(1 for k in keywords if k in semantic_cols)
-        scores[ds_type] = matches
+        score = sum(1 for k in keywords if k in semantic_cols)
+        scores[ds_type] = score
+
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "General Dataset"
+    if scores[best] == 0:
+        return "General Dataset"
+
+    return best
 
 
 # ======================================================================
-# AUTOMATIC CLEANING
+# AUTO CLEANING
 # ======================================================================
-def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
+def auto_clean_df(df):
     df = df.copy()
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
@@ -104,7 +108,7 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
 # ======================================================================
 # GPT INSIGHTS
 # ======================================================================
-def ask_gpt(df: pd.DataFrame, dataset_type: str):
+def ask_gpt(df, dataset_type):
     sample = df.head(40).astype(str).to_csv(index=False)
 
     prompt = f"""
@@ -112,13 +116,12 @@ You are a senior data analyst.
 
 Dataset type: {dataset_type}
 
-Analyze the data sample and return ONLY VALID JSON with:
+Return ONLY VALID JSON with keys:
+- "insights"
+- "recommended_kpis"
+- "recommended_charts"
 
-- "insights": 4–6 key insights
-- "recommended_metrics": 3–5 KPIs relevant to dataset type
-- "recommended_charts": 4–6 visualization ideas
-
-Data sample:
+Dataset sample:
 {sample}
 """
 
@@ -136,8 +139,8 @@ Data sample:
         return json.loads(text[start:end+1])
     except:
         return {
-            "insights": ["GPT failed to parse JSON."],
-            "recommended_metrics": [],
+            "insights": ["GPT could not parse insights."],
+            "recommended_kpis": [],
             "recommended_charts": [],
         }
 
@@ -146,6 +149,7 @@ Data sample:
 # FILE UPLOAD
 # ======================================================================
 uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+
 if not uploaded:
     st.info("⬅ Upload a dataset to begin.")
     st.stop()
@@ -153,151 +157,27 @@ if not uploaded:
 df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
 df_clean = auto_clean_df(df_raw)
 
-# Detect semantic column meanings
+# Detect semantic labels
 semantic_map = {col: detect_semantic_label(col) for col in df_clean.columns}
 semantic_cols = [v for v in semantic_map.values() if v]
 
-# Identify dataset type
 dataset_type = detect_dataset_type(semantic_cols)
 
 
 # ======================================================================
-# SHOW SEMANTIC ANALYSIS
+# SEMANTIC OVERVIEW
 # ======================================================================
-st.subheader("🧠 Semantic Understanding of Your Dataset")
+st.subheader("🧠 Semantic Understanding")
 
 semantic_df = pd.DataFrame({
-    "Column": list(df_clean.columns),
-    "Semantic Meaning": [semantic_map[col] or "unknown" for col in df_clean.columns]
+    "Column": df_clean.columns,
+    "Meaning": [semantic_map[c] or "unknown" for c in df_clean.columns]
 })
 
 st.dataframe(semantic_df)
-
 st.success(f"**Detected Dataset Type → {dataset_type}**")
 
 
 # ======================================================================
 # KPI SUGGESTIONS
-# ======================================================================
-st.subheader("📌 KPI Dashboard (Auto-Detected)")
-
-def compute_kpis(df, semantic_map):
-    results = {}
-
-    # Revenue
-    rev_col = [c for c, s in semantic_map.items() if s == "revenue"]
-    if rev_col:
-        results["Total Revenue"] = df[rev_col[0]].sum()
-
-    # Units sold
-    u_col = [c for c, s in semantic_map.items() if s == "units_sold"]
-    if u_col:
-        results["Units Sold"] = df[u_col[0]].sum()
-
-    # Spend
-    s_col = [c for c, s in semantic_map.items() if s == "spend"]
-    if s_col:
-        results["Total Spend"] = df[s_col[0]].sum()
-
-    # ROI if both exist
-    if rev_col and s_col and df[s_col[0]].sum() > 0:
-        results["ROI"] = df[rev_col[0]].sum() / df[s_col[0]].sum()
-
-    return results
-
-kpis = compute_kpis(df_clean, semantic_map)
-
-if kpis:
-    cols = st.columns(len(kpis))
-    for (k, v), col in zip(kpis.items(), cols):
-        col.metric(k, f"{v:,.2f}")
-else:
-    st.info("No KPIs detected.")
-
-
-
-# ======================================================================
-# RAW + CLEANED DATA
-# ======================================================================
-st.subheader("🧾 Raw Data Preview")
-st.dataframe(df_raw.head(20))
-
-st.subheader("🧹 Cleaned Data")
-st.dataframe(df_clean.head(20))
-
-
-# ======================================================================
-# VISUALIZATION STUDIO
-# ======================================================================
-st.subheader("📊 Visualize Your Data")
-
-numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
-all_cols = df_clean.columns.tolist()
-
-if all_cols:
-
-    chart_type = st.selectbox("Chart type", ["Line", "Bar", "Scatter", "Histogram"])
-    x_axis = st.selectbox("X-axis", all_cols)
-    y_axis = st.selectbox("Y-axis", numeric_cols)
-
-    if st.button("Generate Chart"):
-        if chart_type == "Line":
-            fig = px.line(df_clean, x=x_axis, y=y_axis)
-        elif chart_type == "Bar":
-            fig = px.bar(df_clean, x=x_axis, y=y_axis)
-        elif chart_type == "Scatter":
-            fig = px.scatter(df_clean, x=x_axis, y=y_axis)
-        else:
-            fig = px.histogram(df_clean, x=x_axis)
-
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# ======================================================================
-# GPT INSIGHTS
-# ======================================================================
-st.subheader("🤖 AI Insights")
-
-if st.button("Generate AI Insights"):
-    with st.spinner("Thinking…"):
-        g = ask_gpt(df_clean, dataset_type)
-
-    st.write("### 🔍 Key Insights")
-    for i in g["insights"]:
-        st.write("•", i)
-
-    st.write("### 📌 Recommended KPIs")
-    for i in g["recommended_metrics"]:
-        st.write("•", i)
-
-    st.write("### 📊 Recommended Charts")
-    for i in g["recommended_charts"]:
-        st.write("•", i)
-
-
-# ======================================================================
-# Q&A SECTION
-# ======================================================================
-st.subheader("💬 Ask a Question")
-
-question = st.text_area("Ask anything about your dataset")
-
-if st.button("Ask"):
-    sample = df_clean.head(40).to_csv(index=False)
-    prompt = f"""
-Dataset type: {dataset_type}
-
-Dataset:
-{sample}
-
-Question: {question}
-
-Answer using only the data and correct business language.
-"""
-
-    res = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    st.write(res.choices[0].message.content)
+# ===================
