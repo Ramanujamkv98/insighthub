@@ -1,11 +1,10 @@
 # ======================================================================
-# DataPilot – MVP
-# OpenAI v1.x | Plotly | Pandas | Fast + Safe
+# DataPilot – GCP Deployment Version
+# Fully Cloud Run Compatible
 # ======================================================================
 
 import os
 import json
-import re
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -18,20 +17,12 @@ st.set_page_config(page_title="DataPilot", layout="wide")
 st.title("📊 DataPilot – AI-Assisted Data Explorer")
 
 # ======================================================================
-# OPENAI CLIENT
+# OPENAI CLIENT (GCP Version)
 # ======================================================================
-api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY")   # <-- Cloud Run uses environment variables ONLY
 
 if not api_key:
-    st.error(
-        """
-        ❌ OPENAI_API_KEY not found.
-
-        Fix this:
-        • Streamlit Cloud → Settings → Secrets:
-          OPENAI_API_KEY = your_api_key_here
-        """
-    )
+    st.error("❌ OPENAI_API_KEY not found. Set it in Cloud Run → Environment Variables tab.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -53,7 +44,7 @@ SEMANTIC_MAP = {
 def semantic_match(col: str):
     col_l = col.lower()
     for canonical, synonyms in SEMANTIC_MAP.items():
-        if any(x in col_l for x in synonyms):
+        if any(word in col_l for word in synonyms):
             return canonical
     return None
 
@@ -78,9 +69,9 @@ KPI_RULES = {
         "kpis": {
             "Total Spend": lambda df: df.filter(regex="spend").sum().sum(),
             "ROI": lambda df: (
-                df.get("revenue", pd.Series(dtype=float)).sum()
-                / df.filter(regex="spend").sum().sum()
-            ) if "revenue" in df.columns and df.filter(regex="spend").sum().sum() != 0 else None,
+                df.get("revenue", pd.Series(dtype=float)).sum() /
+                df.filter(regex="spend").sum().sum()
+            ) if "revenue" in df.columns and df.filter(regex="spend").sum().sum() > 0 else None,
         },
     },
     "inventory": {
@@ -93,10 +84,7 @@ KPI_RULES = {
 }
 
 def detect_kpi_group(df: pd.DataFrame):
-    scores = {
-        g: sum(k in df.columns for k in r["keywords"])
-        for g, r in KPI_RULES.items()
-    }
+    scores = {g: sum(k in df.columns for k in r["keywords"]) for g, r in KPI_RULES.items()}
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else None
 
@@ -111,7 +99,7 @@ def compute_kpis(df: pd.DataFrame):
             val = func(df)
             if val is not None and not pd.isna(val):
                 results[name] = float(val)
-        except Exception:
+        except:
             pass
     return results
 
@@ -121,11 +109,9 @@ def compute_kpis(df: pd.DataFrame):
 def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # Drop unnamed index-like columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
     for col in df.columns:
-        # Try numeric cleanup
         if df[col].dtype == object:
             cleaned = (
                 df[col].astype(str)
@@ -135,8 +121,7 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
-        # Try date parsing
-        if any(x in col.lower() for x in ["date", "week", "day"]):
+        if any(keyword in col.lower() for keyword in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
     return df
@@ -145,13 +130,14 @@ def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
 # GPT INSIGHTS
 # ======================================================================
 def ask_gpt(df: pd.DataFrame):
-    # Take a small sample to keep prompt small
     sample = df.head(40).astype(str).to_csv(index=False)
 
     prompt = f"""
-Return ONLY valid JSON with keys:
-- "insights": a short paragraph
-- "charts": a list of suggested chart ideas (strings only)
+Return ONLY valid JSON:
+{{
+  "insights": "...",
+  "charts": ["...", "..."]
+}}
 
 Dataset sample:
 {sample}
@@ -160,31 +146,26 @@ Dataset sample:
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
     )
 
     text = res.choices[0].message.content
 
-    # Try to parse JSON; if it fails, fall back gracefully
+    # Parse JSON safely
     try:
-        # Simple heuristic: find first '{' and last '}' and try json.loads
         start = text.find("{")
         end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidate = text[start : end + 1]
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-    except Exception:
+        if start != -1 and end != -1:
+            return json.loads(text[start : end + 1])
+    except:
         pass
 
-    return {"insights": "GPT failed to produce valid JSON.", "charts": []}
+    return {"insights": "GPT failed to produce JSON.", "charts": []}
 
 # ======================================================================
-# FILE UPLOAD
+# FILE UPLOAD (CSV / Excel)
 # ======================================================================
-uploaded = st.sidebar.file_uploader(
-    "Upload CSV or Excel", type=["csv", "xlsx"]
-)
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 if not uploaded:
     st.info("⬅️ Upload a dataset to begin.")
@@ -202,7 +183,6 @@ df_sem = harmonize_columns(df_clean)
 # KPI DASHBOARD
 # ======================================================================
 st.subheader("📌 Executive Summary")
-
 kpis = compute_kpis(df_sem)
 
 if kpis:
@@ -210,7 +190,7 @@ if kpis:
     for (label, value), col in zip(kpis.items(), cols):
         col.metric(label, f"{value:,.2f}")
 else:
-    st.write("No KPIs detected based on this dataset.")
+    st.write("No KPIs detected.")
 
 # ======================================================================
 # DATA PREVIEWS
@@ -218,7 +198,7 @@ else:
 st.subheader("🧾 Raw Data Preview")
 st.dataframe(df_raw.head(20))
 
-st.subheader("🧹 Cleaned + Semantic-Aligned Data")
+st.subheader("🧹 Cleaned + Harmonized Data")
 st.dataframe(df_sem.head(20))
 
 # ======================================================================
@@ -230,16 +210,12 @@ if st.button("Generate AI Insights"):
     with st.spinner("Analyzing with AI…"):
         gpt = ask_gpt(df_sem)
 
-    st.subheader("📘 Key Insights")
+    st.subheader("📘 Insights")
     st.write(gpt.get("insights", ""))
 
     st.subheader("📊 Suggested Charts")
-    charts = gpt.get("charts", [])
-    if isinstance(charts, list):
-        for i, c in enumerate(charts, 1):
-            st.markdown(f"**{i}.** {c}")
-    else:
-        st.write(charts)
+    for i, c in enumerate(gpt.get("charts", []), 1):
+        st.write(f"{i}. {c}")
 
 # ======================================================================
 # Q&A SECTION
@@ -253,12 +229,16 @@ if st.button("Ask"):
         st.warning("Enter a question.")
     else:
         sample = df_sem.head(50).to_csv(index=False)
-        prompt = (
-            f"Dataset:\n{sample}\n\n"
-            f"Question: {query}\n\n"
-            f"Answer clearly in business language. "
-            f"Do not hallucinate columns that don't exist."
-        )
+
+        prompt = f"""
+Dataset:
+{sample}
+
+Question: {query}
+
+Answer clearly in business language.
+Do NOT guess or invent columns.
+"""
 
         res = client.chat.completions.create(
             model="gpt-4o-mini",
