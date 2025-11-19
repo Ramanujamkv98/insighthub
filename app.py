@@ -1,5 +1,5 @@
 # ======================================================================
-# DataPilot – Stable Streamlit Deployment Version
+# DataPilot – MVP
 # OpenAI v1.x | Plotly | Pandas | Fast + Safe
 # ======================================================================
 
@@ -8,7 +8,6 @@ import json
 import re
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 from openai import OpenAI
 
@@ -17,7 +16,6 @@ from openai import OpenAI
 # ======================================================================
 st.set_page_config(page_title="DataPilot", layout="wide")
 st.title("📊 DataPilot – AI-Assisted Data Explorer")
-
 
 # ======================================================================
 # OPENAI CLIENT
@@ -38,7 +36,6 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-
 # ======================================================================
 # SEMANTIC COLUMN MAP
 # ======================================================================
@@ -50,20 +47,19 @@ SEMANTIC_MAP = {
     "stockout_flag": ["oos", "stockout", "out_of_stock"],
     "spend": ["spend", "cost", "budget", "marketing_spend"],
     "profit": ["profit", "net_profit"],
-    "expenses": ["expense", "expenses"]
+    "expenses": ["expense", "expenses"],
 }
 
-def semantic_match(col):
+def semantic_match(col: str):
     col_l = col.lower()
     for canonical, synonyms in SEMANTIC_MAP.items():
         if any(x in col_l for x in synonyms):
             return canonical
     return None
 
-def harmonize_columns(df):
+def harmonize_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {col: semantic_match(col) or col for col in df.columns}
     return df.rename(columns=rename_map)
-
 
 # ======================================================================
 # KPI RULE ENGINE
@@ -72,37 +68,39 @@ KPI_RULES = {
     "retail": {
         "keywords": ["revenue", "units_sold"],
         "kpis": {
-            "Total Revenue": lambda df: df["revenue"].sum(),
-            "Avg Revenue per Sale": lambda df: df["revenue"].mean(),
-            "Units Sold": lambda df: df["units_sold"].sum(),
+            "Total Revenue": lambda df: df.get("revenue", pd.Series(dtype=float)).sum(),
+            "Avg Revenue per Sale": lambda df: df.get("revenue", pd.Series(dtype=float)).mean(),
+            "Units Sold": lambda df: df.get("units_sold", pd.Series(dtype=float)).sum(),
         },
     },
     "marketing": {
         "keywords": ["spend"],
         "kpis": {
-            "Total Spend": lambda df: df[[c for c in df.columns if 'spend' in c]].sum().sum(),
+            "Total Spend": lambda df: df.filter(regex="spend").sum().sum(),
             "ROI": lambda df: (
-                df["revenue"].sum() /
-                df[[c for c in df.columns if 'spend' in c]].sum().sum()
-            ) if "revenue" in df else None,
+                df.get("revenue", pd.Series(dtype=float)).sum()
+                / df.filter(regex="spend").sum().sum()
+            ) if "revenue" in df.columns and df.filter(regex="spend").sum().sum() != 0 else None,
         },
     },
     "inventory": {
         "keywords": ["inventory_on_hand", "daily_demand"],
         "kpis": {
-            "Avg Daily Demand": lambda df: df["daily_demand"].mean(),
-            "Avg Inventory On-Hand": lambda df: df["inventory_on_hand"].mean(),
+            "Avg Daily Demand": lambda df: df.get("daily_demand", pd.Series(dtype=float)).mean(),
+            "Avg Inventory On-Hand": lambda df: df.get("inventory_on_hand", pd.Series(dtype=float)).mean(),
         },
     },
 }
 
-def detect_kpi_group(df):
-    scores = {g: sum(k in df.columns for k in r["keywords"])
-              for g, r in KPI_RULES.items()}
+def detect_kpi_group(df: pd.DataFrame):
+    scores = {
+        g: sum(k in df.columns for k in r["keywords"])
+        for g, r in KPI_RULES.items()
+    }
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else None
 
-def compute_kpis(df):
+def compute_kpis(df: pd.DataFrame):
     group = detect_kpi_group(df)
     if not group:
         return {}
@@ -110,21 +108,24 @@ def compute_kpis(df):
     results = {}
     for name, func in KPI_RULES[group]["kpis"].items():
         try:
-            results[name] = func(df)
-        except:
+            val = func(df)
+            if val is not None and not pd.isna(val):
+                results[name] = float(val)
+        except Exception:
             pass
     return results
-
 
 # ======================================================================
 # AUTO CLEANING
 # ======================================================================
-def auto_clean_df(df):
+def auto_clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
+    # Drop unnamed index-like columns
     df = df.loc[:, ~df.columns.str.contains("Unnamed")]
 
     for col in df.columns:
+        # Try numeric cleanup
         if df[col].dtype == object:
             cleaned = (
                 df[col].astype(str)
@@ -134,26 +135,25 @@ def auto_clean_df(df):
             )
             df[col] = pd.to_numeric(cleaned, errors="ignore")
 
+        # Try date parsing
         if any(x in col.lower() for x in ["date", "week", "day"]):
             df[col] = pd.to_datetime(df[col], errors="ignore")
 
     return df
 
-
 # ======================================================================
 # GPT INSIGHTS
 # ======================================================================
-def ask_gpt(df):
-    sample = df.head(40).to_csv(index=False)
+def ask_gpt(df: pd.DataFrame):
+    # Take a small sample to keep prompt small
+    sample = df.head(40).astype(str).to_csv(index=False)
 
     prompt = f"""
-Return ONLY JSON with keys:
-- "insights"
-- "charts"
+Return ONLY valid JSON with keys:
+- "insights": a short paragraph
+- "charts": a list of suggested chart ideas (strings only)
 
-Rules:
-- "charts" must be a list (no code)
-Sample:
+Dataset sample:
 {sample}
 """
 
@@ -163,35 +163,40 @@ Sample:
     )
 
     text = res.choices[0].message.content
-    match = re.search(r"\{.*\}", text, re.DOTALL)
 
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except:
-            pass
+    # Try to parse JSON; if it fails, fall back gracefully
+    try:
+        # Simple heuristic: find first '{' and last '}' and try json.loads
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = text[start : end + 1]
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception:
+        pass
 
     return {"insights": "GPT failed to produce valid JSON.", "charts": []}
-
 
 # ======================================================================
 # FILE UPLOAD
 # ======================================================================
-uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader(
+    "Upload CSV or Excel", type=["csv", "xlsx"]
+)
 
 if not uploaded:
     st.info("⬅️ Upload a dataset to begin.")
     st.stop()
 
-df_raw = (
-    pd.read_csv(uploaded)
-    if uploaded.name.endswith(".csv")
-    else pd.read_excel(uploaded)
-)
+if uploaded.name.endswith(".csv"):
+    df_raw = pd.read_csv(uploaded)
+else:
+    df_raw = pd.read_excel(uploaded)
 
 df_clean = auto_clean_df(df_raw)
 df_sem = harmonize_columns(df_clean)
-
 
 # ======================================================================
 # KPI DASHBOARD
@@ -205,8 +210,7 @@ if kpis:
     for (label, value), col in zip(kpis.items(), cols):
         col.metric(label, f"{value:,.2f}")
 else:
-    st.write("No KPIs detected.")
-
+    st.write("No KPIs detected based on this dataset.")
 
 # ======================================================================
 # DATA PREVIEWS
@@ -216,7 +220,6 @@ st.dataframe(df_raw.head(20))
 
 st.subheader("🧹 Cleaned + Semantic-Aligned Data")
 st.dataframe(df_sem.head(20))
-
 
 # ======================================================================
 # GPT AUTO INSIGHTS
@@ -231,8 +234,12 @@ if st.button("Generate AI Insights"):
     st.write(gpt.get("insights", ""))
 
     st.subheader("📊 Suggested Charts")
-    st.write(gpt.get("charts", []))
-
+    charts = gpt.get("charts", [])
+    if isinstance(charts, list):
+        for i, c in enumerate(charts, 1):
+            st.markdown(f"**{i}.** {c}")
+    else:
+        st.write(charts)
 
 # ======================================================================
 # Q&A SECTION
@@ -246,7 +253,12 @@ if st.button("Ask"):
         st.warning("Enter a question.")
     else:
         sample = df_sem.head(50).to_csv(index=False)
-        prompt = f"Dataset:\n{sample}\n\nQuestion: {query}\nAnswer clearly in business language."
+        prompt = (
+            f"Dataset:\n{sample}\n\n"
+            f"Question: {query}\n\n"
+            f"Answer clearly in business language. "
+            f"Do not hallucinate columns that don't exist."
+        )
 
         res = client.chat.completions.create(
             model="gpt-4o-mini",
