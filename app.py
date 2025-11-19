@@ -20,7 +20,7 @@ st.title("🧠 DataPilot – AI-Assisted Semantic Data Explorer")
 # ======================================================================
 # OPENAI CLIENT
 # ======================================================================
-api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
     st.error("❌ OPENAI_API_KEY not found. Add it in Cloud Run → Variables")
