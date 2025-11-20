@@ -1,4 +1,4 @@
-****README Summary for DataPilot (Short & Polished)**
+
 **About DataPilot**
 **DataPilot is a lightweight, AI-powered analytics application designed to help small and medium-scale businesses unlock insights from their data without needing a full data team. Many SMBs struggle with messy spreadsheets, inconsistent column names, and limited visualization tools. DataPilot automates cleaning, semantic column matching, KPI detection, and EDA visualizations — all through a simple, no-code Streamlit interface.
 
